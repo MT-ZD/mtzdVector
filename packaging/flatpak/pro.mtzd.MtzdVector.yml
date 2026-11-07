@@ -1,0 +1,54 @@
+# Flatpak manifest for mtzdVector.
+#
+#   ./build.sh            # vendors crates, builds, installs / updates (user)
+#   flatpak run pro.mtzd.MtzdVector
+#
+# Flatpak can't export thumbnailers: the app registers one in
+# ~/.local/share/thumbnailers on first start (it runs `flatpak run`).
+app-id: pro.mtzd.MtzdVector
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: mtzd-vector
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Google Fonts catalogue and downloads.
+  - --share=network
+  # Documents, linked images and recent files can live anywhere (e.g. other drives).
+  - --filesystem=host
+  # The host's CMYK ICC profiles (colord, Ghostscript) for print PDFs, read-only.
+  - --filesystem=host-os:ro
+  # File managers ask the thumbnailer to write its PNG into the host's /tmp.
+  - --filesystem=/tmp
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/mtzd-vector/cargo
+    CARGO_NET_OFFLINE: 'true'
+modules:
+  - name: mtzd-vector
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release --locked
+      - install -Dm755 target/release/mtzd-vector /app/bin/mtzd-vector
+      - install -Dm644 packaging/pro.mtzd.MtzdVector.desktop -t /app/share/applications
+      - install -Dm644 packaging/pro.mtzd.MtzdVector.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 packaging/pro.mtzd.MtzdVector.xml -t /app/share/mime/packages
+      - install -Dm644 LICENSE -t /app/share/licenses/pro.mtzd.MtzdVector
+      - target/release/mtzd-vector --write-icons /app/share/icons/hicolor
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - packaging/flatpak/build
+          - packaging/flatpak/repo
+          - packaging/flatpak/.flatpak-builder
+          - packaging/flatpak/.venv
+          - mtzd-vector.flatpak
+      - cargo-sources.json

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=mtzdVector
+GenericName=Vector Editor
+Comment=Compact vector editor
+Exec=mtzd-vector %F
+Icon=pro.mtzd.MtzdVector
+Terminal=false
+Categories=Graphics;2DGraphics;VectorGraphics;
+Keywords=vector;svg;illustration;design;drawing;
+MimeType=application/x-mtzdvector;
+StartupWMClass=pro.mtzd.MtzdVector

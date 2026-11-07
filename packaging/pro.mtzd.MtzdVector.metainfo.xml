@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>pro.mtzd.MtzdVector</id>
+  <name>mtzdVector</name>
+  <summary>Compact vector editor</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="pro.mtzd">
+    <name>mtzd</name>
+  </developer>
+  <description>
+    <p>A compact vector editor: shapes, paths, text, booleans, a shape builder,
+    effects, and SVG / PDF / EPS import and export.</p>
+  </description>
+  <url type="homepage">https://mtzd.pro</url>
+  <launchable type="desktop-id">pro.mtzd.MtzdVector.desktop</launchable>
+  <provides>
+    <binary>mtzd-vector</binary>
+    <mediatype>application/x-mtzdvector</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-06"/>
+  </releases>
+</component>

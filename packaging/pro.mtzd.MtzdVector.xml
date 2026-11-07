@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-mtzdvector">
+    <comment>mtzdVector document</comment>
+    <icon name="pro.mtzd.MtzdVector"/>
+    <glob pattern="*.mvec"/>
+    <!-- Zip container with a leading "mimetype" entry (format 2+). -->
+    <magic priority="80">
+      <match type="string" value="PK\003\004" offset="0">
+        <match type="string" value="mimetypeapplication/x-mtzdvector" offset="30"/>
+      </match>
+    </magic>
+    <!-- Plain JSON (format 1). -->
+    <magic priority="50">
+      <match type="string" value="{&quot;artboards&quot;" offset="0"/>
+    </magic>
+  </mime-type>
+</mime-info>

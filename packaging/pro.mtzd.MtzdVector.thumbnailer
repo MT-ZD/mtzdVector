@@ -1,0 +1,4 @@
+[Thumbnailer Entry]
+TryExec=mtzd-vector
+Exec=mtzd-vector --thumbnail %i %o %s
+MimeType=application/x-mtzdvector;
