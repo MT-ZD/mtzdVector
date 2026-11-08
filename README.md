@@ -39,6 +39,20 @@
 
 ## Installation
 
+### Prebuilt packages
+
+[Releases](https://github.com/MT-ZD/mtzdVector/releases) has these for x86_64
+and aarch64:
+
+- **Flatpak:** `flatpak install --user mtzd-vector-<version>-<arch>.flatpak`,
+  which fetches the runtime from Flathub.
+- **AppImage:** `chmod +x mtzd-vector-<version>-<arch>.AppImage`, then run it.
+- **Binary:** extract `mtzd-vector-<version>-linux-<arch>.tar.gz` and run
+  `./mtzd-vector`.
+
+On first start the AppImage and binary add themselves to your application
+menu. Both need glibc 2.35 or newer (Ubuntu 22.04 and later).
+
 ### Flatpak (recommended)
 
 All you need is `flatpak`. The build script does the rest: it adds the

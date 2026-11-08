@@ -8,7 +8,7 @@ use super::{design, edit_style};
 use crate::app::App;
 use crate::document::{Arrowhead, LineCap, LineJoin, ShapeKind, Stroke as DStroke, StrokeAlign};
 use crate::ui::theme::{self, TEXT_DIM};
-use crate::ui::widgets::{self, Num, WellPaint, WellTarget};
+use crate::ui::widgets::{self, Num, WellPaint};
 
 /// Dash presets in multiples of the stroke width.
 const DASHES: [(&str, &[f64]); 6] = [
@@ -168,16 +168,14 @@ pub fn stroke_section(app: &mut App, ui: &mut Ui) {
                         }
                     }
                 }
-                pick = design::eyedropper_button(ui, has, "Pick the stroke colour from the canvas");
             },
             |ui| {
                 let Some(st) = &mut p.stroke else { return };
                 let hex = super::color::key_label(app, p.stroke_key).unwrap_or_else(|| st.color.with_alpha(1.0).to_hex());
                 let open = design::paint_row(app, ui, "stroke", WellPaint::Solid(st.color), &hex, |ui| super::color::alpha_field(ui, &mut st.color));
                 if open {
-                    app.ui.color_target = WellTarget::Stroke;
                     design::editor_frame(ui, |ui| {
-                        design::picker_linked(app, ui, &mut st.color, Some(&mut p.stroke_key), egui::Id::new("stroke_picker"));
+                        design::picker_linked(app, ui, &mut st.color, Some(&mut p.stroke_key), egui::Id::new("stroke_picker"), Some(("Pick the stroke colour from the canvas", &mut pick)));
                     });
                 }
                 ui.horizontal(|ui| {
@@ -214,7 +212,6 @@ pub fn stroke_section(app: &mut App, ui: &mut Ui) {
         }
     });
     if pick {
-        app.ui.color_target = WellTarget::Stroke;
         app.set_tool(crate::app::Tool::Eyedropper);
     }
 }

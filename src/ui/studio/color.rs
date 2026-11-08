@@ -8,7 +8,7 @@ use super::{design, edit_style};
 use crate::app::App;
 use crate::document::{Gradient, GradientKind, ImageFill, ImageMode, Paint, Rgba};
 use crate::ui::theme::{self, TEXT_DIM};
-use crate::ui::widgets::{self, Num, WellPaint, WellTarget};
+use crate::ui::widgets::{self, Num, WellPaint};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -68,7 +68,6 @@ pub fn fill_section(app: &mut App, ui: &mut Ui) {
             "Fill",
             |ui| {
                 add = widgets::tip(widgets::mini_icon(ui, icon::PLUS, TEXT_DIM), if has { "Add a fill over this one" } else { "Add fill" }, None).clicked();
-                pick = design::eyedropper_button(ui, has, "Pick the fill colour from the canvas");
             },
             |ui| {
                 if p.fill.is_none() && p.fills.is_empty() {
@@ -96,12 +95,11 @@ pub fn fill_section(app: &mut App, ui: &mut Ui) {
                         remove = Some(k);
                     }
                     if open {
-                        app.ui.color_target = WellTarget::Fill;
                         if k == 0 && matches!(fill, Paint::Gradient(_)) && app.ui.gradient_edit.is_none() {
                             app.ui.gradient_edit = app.selection.first().copied();
                         }
                         let fill_key = if k == 0 { Some(&mut p.fill_key) } else { None };
-                        design::editor_frame(ui, |ui| paint_body(app, ui, &mut slot, fill_key, k));
+                        design::editor_frame(ui, |ui| paint_body(app, ui, &mut slot, fill_key, k, &mut pick));
                     }
                     if k == 0 {
                         p.fill = slot;
@@ -130,7 +128,6 @@ pub fn fill_section(app: &mut App, ui: &mut Ui) {
         }
     });
     if pick {
-        app.ui.color_target = WellTarget::Fill;
         app.set_tool(crate::app::Tool::Eyedropper);
     }
 }
@@ -162,7 +159,7 @@ pub fn background_section(app: &mut App, ui: &mut Ui) {
 
 /// Editor for one fill: kind, then the colour picker, gradient editor,
 /// or image settings. `k` is the fill's index (0 = main fill).
-fn paint_body(app: &mut App, ui: &mut Ui, slot: &mut Option<Paint>, key: Option<&mut Option<u64>>, k: usize) {
+fn paint_body(app: &mut App, ui: &mut Ui, slot: &mut Option<Paint>, key: Option<&mut Option<u64>>, k: usize, pick: &mut bool) {
     let mut kind = match slot {
         None => Kind::None,
         Some(Paint::Solid(_)) => Kind::Solid,
@@ -195,7 +192,7 @@ fn paint_body(app: &mut App, ui: &mut Ui, slot: &mut Option<Paint>, key: Option<
         None => {}
         Some(Paint::Solid(c)) => match key {
             Some(key) => {
-                design::picker_linked(app, ui, c, Some(key), picker_id);
+                design::picker_linked(app, ui, c, Some(key), picker_id, Some(("Pick the fill colour from the canvas", pick)));
             }
             None => {
                 design::picker(app, ui, c, picker_id);

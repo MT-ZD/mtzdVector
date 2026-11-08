@@ -601,13 +601,6 @@ pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Ra
 // Color wells
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum WellTarget {
-    #[default]
-    Fill,
-    Stroke,
-}
-
 /// Paint of a well: none, a solid color, a gradient (first, last colour) or an image fill.
 #[derive(Clone, Copy)]
 pub enum WellPaint {

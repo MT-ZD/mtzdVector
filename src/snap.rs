@@ -39,7 +39,7 @@ pub struct Targets {
 }
 
 impl App {
-    fn tol(&self) -> f64 {
+    pub(crate) fn tol(&self) -> f64 {
         6.0 / self.view.zoom as f64
     }
 

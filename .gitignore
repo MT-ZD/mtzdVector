@@ -6,3 +6,4 @@
 /packaging/flatpak/.flatpak-cargo-generator.py
 /packaging/flatpak/.cargo-lock.sha256
 /mtzd-vector.flatpak
+*.AppImage

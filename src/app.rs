@@ -262,6 +262,8 @@ pub struct App {
     pub drag: Drag,
     pub press: Option<egui::Pos2>,
     pub dragging: bool,
+    /// Shape a plain click selects when the press started a move of a covered selection.
+    pub press_top: Option<u64>,
     pub hover: Option<u64>,
     pub node_sel: Vec<(u64, usize, usize)>,
     pub pen: Option<PenState>,
@@ -441,6 +443,7 @@ impl App {
             drag: Drag::None,
             press: None,
             dragging: false,
+            press_top: None,
             hover: None,
             node_sel: Vec::new(),
             pen: None,

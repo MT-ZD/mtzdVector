@@ -32,6 +32,17 @@ starts (`Exec=flatpak run --command=mtzd-vector pro.mtzd.MtzdVector
 --thumbnail %i %o %s`), unless a native build's working entry is there. The
 `/tmp` permission lets it write the PNG where the file manager asks.
 
+CI uses `build.sh --bundle-only`, which leaves any installed copy alone.
+
+## AppImage
+
+    cargo build --release
+    packaging/appimage/build.sh target/release/mtzd-vector mtzd-vector.AppImage
+
+The AppImage contains the app only, so build it on an old distro: it needs
+that distro's glibc or newer. On start it registers the `.AppImage` file
+itself as the launcher and thumbnailer.
+
 ## Native builds
 
 A native binary registers itself on start (and with `--install-desktop`):

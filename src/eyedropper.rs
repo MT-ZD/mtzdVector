@@ -7,7 +7,6 @@ use kurbo::{Point, Shape as _};
 
 use crate::app::{App, Tool};
 use crate::document::{Paint, Rgba, ShapeKind, Stroke as DStroke};
-use crate::ui::widgets::WellTarget;
 
 impl App {
     /// The colour visible at `p`: every shape covering it (fill, stroke,
@@ -167,7 +166,8 @@ impl App {
 
     pub fn eyedropper_click(&mut self, p: Point, shift: bool) {
         let Some(c) = self.sample_color(p) else { return };
-        let to_stroke = shift || self.ui.color_target == WellTarget::Stroke;
+        self.settings.last_picked = Some(c);
+        let to_stroke = shift || self.ui.paint_open.as_deref() == Some("stroke");
         self.apply_picked(c, to_stroke);
         let back = self.prev_tool.filter(|t| *t != Tool::Eyedropper).unwrap_or(Tool::Select);
         self.set_tool(back);

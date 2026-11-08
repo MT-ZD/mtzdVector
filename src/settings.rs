@@ -31,6 +31,8 @@ pub struct Settings {
     pub keep_backup: bool,
     /// Colour picker look (wheel or square, HSL or RGB), shared by all pickers.
     pub picker: crate::color::PickerPrefs,
+    /// The colour the eyedropper last sampled.
+    pub last_picked: Option<crate::document::Rgba>,
     /// Default text language (hyphenation, spelling).
     pub language: String,
     /// Underline misspelled words while editing text.
@@ -61,6 +63,7 @@ impl Default for Settings {
             default_unit: crate::units::Unit::Px,
             keep_backup: false,
             picker: Default::default(),
+            last_picked: None,
             language: "en-us".into(),
             spell_check: true,
             libraries: Vec::new(),

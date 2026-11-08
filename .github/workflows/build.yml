@@ -1,0 +1,95 @@
+# Linux packages (tarball, AppImage, Flatpak): every push to main leaves them as workflow artifacts;
+# pushing a tag like v0.1.0 publishes them on a GitHub Release.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported runners: the binary needs this glibc or newer.
+          - { arch: x86_64, runner: ubuntu-22.04 }
+          - { arch: aarch64, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Smoke test
+        run: target/release/mtzd-vector --write-icons "$RUNNER_TEMP/icons"
+      - name: Package
+        run: |
+          label="${GITHUB_REF_NAME//\//-}"
+          [ "$GITHUB_REF_TYPE" = tag ] || label="${GITHUB_SHA::7}"
+          name="mtzd-vector-$label-linux-${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          cp target/release/mtzd-vector LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -r "dist/$name"
+          packaging/appimage/build.sh target/release/mtzd-vector "dist/mtzd-vector-$label-${{ matrix.arch }}.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  flatpak:
+    name: Flatpak ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flatpak
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder ccache python3-venv
+          # Ubuntu's AppArmor default stops bubblewrap from creating its sandbox.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Build
+        run: packaging/flatpak/build.sh --bundle-only
+      - name: Package
+        run: |
+          label="${GITHUB_REF_NAME//\//-}"
+          [ "$GITHUB_REF_TYPE" = tag ] || label="${GITHUB_SHA::7}"
+          mkdir dist
+          mv mtzd-vector.flatpak "dist/mtzd-vector-$label-${{ matrix.arch }}.flatpak"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: [build, flatpak]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes

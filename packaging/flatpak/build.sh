@@ -6,6 +6,7 @@
 #   packaging/flatpak/build.sh --run      … then start it
 #   packaging/flatpak/build.sh --clean    drop build caches first
 #   packaging/flatpak/build.sh --bundle   also write mtzd-vector.flatpak (single-file bundle)
+#   packaging/flatpak/build.sh --bundle-only   write the bundle without installing the app
 #
 # Uses flatpak-builder if installed, else the org.flatpak.Builder Flatpak
 # (installed automatically). Rust crates are vendored into cargo-sources.json,
@@ -20,13 +21,14 @@ state="$here/.flatpak-builder"
 build="$here/build"
 repo="$here/repo"
 
-run=0 clean=0 bundle=0
+run=0 clean=0 bundle=0 install=1
 for a in "$@"; do
     case "$a" in
         --run) run=1 ;;
         --clean) clean=1 ;;
         --bundle) bundle=1 ;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        --bundle-only) bundle=1 install=0 ;;
+        -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -49,7 +51,7 @@ else
         say "flatpak-builder not found; installing org.flatpak.Builder (user)"
         flatpak --user install -y flathub org.flatpak.Builder
     fi
-    builder=(flatpak run --filesystem="$root" org.flatpak.Builder)
+    builder=(flatpak run --no-documents-portal --filesystem="$root" org.flatpak.Builder)
 fi
 
 # Vendored crates, regenerated when Cargo.lock changes.
@@ -74,8 +76,9 @@ if (( clean )); then
     rm -rf "$state" "$build" "$repo"
 fi
 
-say "Building and installing $APP_ID"
-args=(--user --install --install-deps-from=flathub --force-clean --ccache --state-dir="$state")
+say "Building $APP_ID"
+args=(--user --install-deps-from=flathub --force-clean --ccache --state-dir="$state")
+(( install )) && args+=(--install)
 (( bundle )) && args+=(--repo="$repo")
 "${builder[@]}" "${args[@]}" "$build" "$manifest"
 
@@ -84,6 +87,7 @@ if (( bundle )); then
     flatpak build-bundle "$repo" "$root/mtzd-vector.flatpak" "$APP_ID" --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
 fi
 
+(( install )) || exit 0
 version=$(flatpak --user info "$APP_ID" 2>/dev/null | sed -n 's/^ *Version: //p' | head -1)
 say "Installed $APP_ID ${version:+$version }— run with: flatpak run $APP_ID"
 (( run )) && exec flatpak run "$APP_ID"

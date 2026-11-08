@@ -805,11 +805,6 @@ pub fn header_actions(ui: &mut Ui, has: bool, add: &mut bool, remove: &mut bool,
     }
 }
 
-/// Eyedropper in a section header.
-pub fn eyedropper_button(ui: &mut Ui, show: bool, tip: &str) -> bool {
-    show && widgets::tip(widgets::mini_icon(ui, icon::EYEDROPPER, TEXT_DIM), tip, Some("I")).clicked()
-}
-
 /// A paint row: swatch and label on the left, `trailing` on the right (added
 /// right to left). Clicking the swatch or label toggles the inline editor
 /// `key`; returns whether it is open.
@@ -862,14 +857,15 @@ pub fn editor_frame(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 /// Colour picker with the document's colour keys and its colours below it.
 /// Returns true when the colour changed.
 pub fn picker(app: &mut App, ui: &mut Ui, color: &mut crate::document::Rgba, id: egui::Id) -> bool {
-    picker_linked(app, ui, color, None, id)
+    picker_linked(app, ui, color, None, id, None)
 }
 
 /// Picker for a colour that can be linked to a colour key (fills and
 /// strokes): choosing a key links it, editing the colour unlinks it.
-pub fn picker_linked(app: &mut App, ui: &mut Ui, color: &mut crate::document::Rgba, mut link: Option<&mut Option<u64>>, id: egui::Id) -> bool {
+pub fn picker_linked(app: &mut App, ui: &mut Ui, color: &mut crate::document::Rgba, mut link: Option<&mut Option<u64>>, id: egui::Id, eyedropper: Option<(&str, &mut bool)>) -> bool {
     let before = *color;
-    if crate::color::color_picker(ui, color, id) {
+    let tools = eyedropper.map(|(tip, pick)| crate::color::PickerTools { tip, last: app.settings.last_picked, pick });
+    if crate::color::color_picker_with(ui, color, id, tools) {
         if let Some(l) = link.as_deref_mut() {
             *l = None;
         }

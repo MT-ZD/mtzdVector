@@ -624,7 +624,8 @@ impl App {
         let editing_hit = self.text_edit.as_ref().map(|t| t.id).filter(|id| self.hit_shape(p) == Some(*id));
         if let (Some(id), true) = (editing_hit, (inp.double || inp.triple) && resp.hovered()) {
             self.text_mouse(id, p, false, if inp.triple { 3 } else { 2 });
-        } else if inp.double && resp.hovered() {
+        } else if inp.double && resp.hovered() && !(inp.alt && self.tool == Tool::Select) {
+            // Quick Alt+clicks step through layers; they aren't a double-click.
             self.on_double_click(p, pos);
         }
         if inp.pressed && resp.hovered() {
@@ -863,14 +864,8 @@ impl App {
                 }
             }
             Drag::Scale { handle, bbox, frame, originals } => {
-                // Snap the dragged edge when the box is axis-aligned.
-                let [fa, fb, fc, fd, ..] = frame.as_coeffs();
-                let p = if fb.abs() < 1e-9 && fc.abs() < 1e-9 && fa > 0.0 && fd > 0.0 {
-                    let ids: Vec<u64> = originals.iter().map(|o| o.id).collect();
-                    self.snap_pointer(p, inp, &ids)
-                } else {
-                    p
-                };
+                let ids: Vec<u64> = originals.iter().map(|o| o.id).collect();
+                let p = self.snap_scale_handle(p, *handle, *bbox, *frame, inp, &ids);
                 let inv = frame.inverse();
                 let a = *frame * scale_affine(*handle, *bbox, inv * p, inp.shift != self.ui.lock_aspect, inp.alt) * inv;
                 for o in originals {
@@ -1022,6 +1017,9 @@ impl App {
 
     fn on_release(&mut self, p: Point, inp: &Input) {
         let drag = std::mem::replace(&mut self.drag, Drag::None);
+        if let Some(id) = self.press_top.take().filter(|_| !self.dragging) {
+            self.selection = vec![id];
+        }
         if matches!(drag, Drag::Pivot) {
             self.snap_guides.clear();
         }
@@ -1244,7 +1242,73 @@ impl App {
     // Select tool
     // ------------------------------------------------------------------
 
+    /// Whether a selected shape is under `p`, even behind other shapes.
+    fn selection_under(&mut self, p: Point) -> bool {
+        let hits = self.hit_shapes(p, true);
+        self.selection.clone().into_iter().any(|id| match self.doc.parent_of(id) {
+            Some(par) => self.hit_child(par, p) == Some(id),
+            None => hits.contains(&id),
+        })
+    }
+
+    /// Layers of `s` under `p`, top-most first, looking inside groups.
+    fn hit_layers(&mut self, s: &Shape, p: Point, tol: f64, out: &mut Vec<u64>) {
+        if !self.shape_hit(s, p, tol) {
+            return;
+        }
+        let found = out.len();
+        if let ShapeKind::Group { children } = &s.kind {
+            for c in children.iter().rev().filter(|c| c.visible && !c.locked) {
+                self.hit_layers(c, p, tol, out);
+            }
+        }
+        // Not a group, or hit only through the group's own outline.
+        if out.len() == found {
+            out.push(s.id);
+        }
+    }
+
+    /// The next layer down at `p` below the selected one, wrapping to the
+    /// top. A selected group steps to its top layer here; with nothing
+    /// selected under `p`, the top-most layer.
+    fn layer_beneath(&mut self, p: Point) -> Option<u64> {
+        let tol = 4.0 / self.view.zoom as f64;
+        let mut stack = Vec::new();
+        for id in self.hit_shapes(p, true) {
+            if let Some(s) = self.doc.get(id).cloned() {
+                self.hit_layers(&s, p, tol, &mut stack);
+            }
+        }
+        // An auto layout's background stands for the layout itself.
+        let mut layers: Vec<u64> = Vec::with_capacity(stack.len());
+        for id in stack {
+            let id = match self.doc.parent_of(id) {
+                Some(g) if self.doc.get(g).and_then(|s| s.layout.as_ref()).and_then(|l| l.background) == Some(id) => g,
+                _ => id,
+            };
+            if !layers.contains(&id) {
+                layers.push(id);
+            }
+        }
+        let in_selected_group = |h: u64| {
+            let mut parent = self.doc.parent_of(h);
+            while let Some(x) = parent {
+                if self.selection.contains(&x) {
+                    return true;
+                }
+                parent = self.doc.parent_of(x);
+            }
+            false
+        };
+        let next = match layers.iter().position(|h| self.selection.contains(h)) {
+            Some(i) => (i + 1) % layers.len(),
+            None => layers.iter().position(|h| in_selected_group(*h)).unwrap_or(0),
+        };
+        layers.get(next).copied()
+    }
+
     fn select_press(&mut self, p: Point, sp: Pos2, inp: &Input) {
+        self.press_top = None;
         if let Some((id, part)) = self.gradient_handle_at(sp) {
             self.select_grad_part(id, part);
             self.drag = Drag::Gradient { id, part };
@@ -1256,6 +1320,9 @@ impl App {
         }
         // Clicking elsewhere ends gradient editing.
         self.ui.gradient_edit = None;
+        // Alt+click: the layer beneath the selected one (a drag duplicates).
+        let beneath = if inp.alt && !inp.shift && !inp.cmd { self.layer_beneath(p) } else { None };
+        self.press_top = beneath;
         if !self.selection.is_empty() {
             if self.pivot_at(sp) {
                 self.drag = Drag::Pivot;
@@ -1292,7 +1359,13 @@ impl App {
                     }
                     self.selection.push(id);
                 } else if !self.selection.contains(&id) {
-                    self.selection = vec![id];
+                    if !inp.cmd && self.selection_under(p) {
+                        // Covered by another shape: a drag moves the
+                        // selection, a plain click selects what's on top.
+                        self.press_top = beneath.or(Some(id));
+                    } else {
+                        self.selection = vec![id];
+                    }
                 }
                 self.drag = Drag::Move { start: p, originals: self.selected_shapes().into_iter().cloned().collect() };
             }
@@ -2565,6 +2638,40 @@ impl App {
         let Some(m0) = moving else { return d };
         let ids: Vec<u64> = originals.iter().map(|o| o.id).collect();
         self.snap_box(m0, d, &ids)
+    }
+
+    /// Snap a scale handle. Corners follow the pointer. On a rotated or
+    /// sheared box an edge handle can only slide along its local axis, so it
+    /// goes as far along that axis as reaches what the handle snapped to.
+    fn snap_scale_handle(&mut self, p: Point, handle: Handle, bbox: Rect, frame: Affine, inp: &Input, exclude: &[u64]) -> Point {
+        let [a, b, c, d, ..] = frame.as_coeffs();
+        let axis_aligned = b.abs() < 1e-9 && c.abs() < 1e-9 && a > 0.0 && d > 0.0;
+        let along_x = matches!(handle, Handle::E | Handle::W);
+        if axis_aligned || !(along_x || matches!(handle, Handle::N | Handle::S)) {
+            return self.snap_pointer(p, inp, exclude);
+        }
+        let l = frame.inverse() * p;
+        let (at, axis) = if along_x { (Point::new(l.x, bbox.center().y), Vec2::new(a, b)) } else { (Point::new(bbox.center().x, l.y), Vec2::new(c, d)) };
+        let axis = axis.normalize();
+        let h = frame * at;
+        let off = self.snap_pointer(h, inp, exclude) - h;
+        let reach = 3.0 * self.tol();
+        let travel = |off: f64, axis: f64| (off != 0.0 && (off / axis).abs() <= reach).then(|| off / axis);
+        let (tx, ty) = (travel(off.x, axis.x), travel(off.y, axis.y));
+        let Some(t) = [tx, ty].into_iter().flatten().min_by(|p, q| p.abs().total_cmp(&q.abs())) else {
+            self.snap_guides.clear();
+            return p;
+        };
+        // Only the lines the handle actually reaches keep a guide.
+        let q = h + axis * t;
+        let r = Rect::from_points(q, q);
+        let hits = |v: Option<f64>| v.is_some_and(|v| (v - t).abs() < 1e-6);
+        let (hit_x, hit_y) = (hits(tx), hits(ty));
+        self.snap_guides.retain(|g| if g.vertical { hit_x } else { hit_y });
+        for g in &mut self.snap_guides {
+            g.moving = r;
+        }
+        q
     }
 
     /// Snap a pointer position while drawing or resizing (Ctrl disables).

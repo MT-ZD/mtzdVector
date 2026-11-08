@@ -25,7 +25,6 @@ use crate::commands::{self, Cmd, Press, Scope};
 use crate::document::ShapeKind;
 use crate::platform::{ClipKey, PlatformEvent, clipboard};
 
-pub use widgets::WellTarget;
 
 pub struct PaletteState {
     pub query: String,
@@ -75,7 +74,6 @@ pub struct UiState {
     pub blend: crate::paint_ops::BlendState,
     pub trace: crate::paint_ops::TraceState,
     pub prefs: crate::settings::PrefsState,
-    pub color_target: WellTarget,
     /// Inline colour editor open in the Design panel ("fill", "stroke", …).
     pub paint_open: Option<String>,
     pub palette: Option<PaletteState>,
@@ -114,7 +112,6 @@ impl Default for UiState {
             blend: Default::default(),
             trace: Default::default(),
             prefs: Default::default(),
-            color_target: WellTarget::Fill,
             paint_open: None,
             palette: None,
             ctx_menu: None,

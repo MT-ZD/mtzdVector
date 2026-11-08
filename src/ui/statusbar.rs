@@ -9,7 +9,7 @@ use crate::app::{App, Tool};
 /// Modifier hints for the current tool: (key, meaning).
 fn modifier_hints(t: Tool) -> &'static [(&'static str, &'static str)] {
     match t {
-        Tool::Select => &[("Shift", "constrain · add to selection"), ("Alt", "duplicate · scale from center · measure"), ("Ctrl", "no snapping")],
+        Tool::Select => &[("Shift", "constrain · add to selection"), ("Alt", "click: layer beneath · duplicate · scale from center · measure"), ("Ctrl", "no snapping")],
         Tool::Node => &[("Shift", "add to selection"), ("Alt", "break handle symmetry"), ("Ctrl", "bend segment · pull handles from a node")],
         Tool::Fill => &[("Shift", "45° angles"), ("Double-click", "add stop"), ("Del", "remove stop")],
         Tool::Rect | Tool::Ellipse | Tool::Star | Tool::Polygon | Tool::Prim(_) => &[("Shift", "keep proportions · add to selection"), ("Alt", "draw from center"), ("Ctrl", "no snapping")],

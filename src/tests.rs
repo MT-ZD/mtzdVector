@@ -1763,6 +1763,181 @@ mod app_tests {
         let c = d.app.doc.get(ib).unwrap().fill.as_ref().and_then(|f| f.solid()).unwrap();
         assert!(c.r > 0.95 && c.b < 0.05, "{c:?}");
         assert_eq!(d.app.tool, crate::app::Tool::Select, "returns to the previous tool");
+        assert!(d.app.settings.last_picked.is_some_and(|c| c.r > 0.95), "remembers the colour");
+    }
+
+    #[test]
+    fn eyedropper_targets_the_open_colour_editor() {
+        let hex = |c: Rgba| c.with_alpha(1.0).to_hex();
+        let run = |open: Option<&str>, shift: bool| {
+            let mut d = Driver::new();
+            let id = d.app.doc.shapes()[0].id;
+            let mut sh = d.app.doc.get(id).unwrap().clone();
+            sh.fill = Some(Paint::Solid(Rgba::from_hex("#112233").unwrap()));
+            sh.stroke = Some(crate::document::Stroke { color: Rgba::from_hex("#445566").unwrap(), width: 2.0, ..Default::default() });
+            d.app.doc.replace(sh);
+            let mut src = Shape::new(ShapeKind::Rect { w: 80.0, h: 80.0, radii: [0.0; 4] });
+            src.transform = Affine::translate((600.0, 100.0));
+            src.fill = Some(Paint::Solid(Rgba::from_hex("#FF0000").unwrap()));
+            d.app.doc.add_shape(src);
+            d.app.selection = vec![id];
+            d.app.ui.paint_open = open.map(String::from);
+            d.app.set_tool(crate::app::Tool::Eyedropper);
+            d.frames(3, vec![]);
+            if shift {
+                d.mods = egui::Modifiers::SHIFT;
+                d.frame(vec![egui::Event::ModifiersChanged(d.mods)]);
+            }
+            d.move_to(d.app.view.to_screen(kurbo::Point::new(640.0, 140.0)));
+            d.button(egui::PointerButton::Primary, true);
+            d.button(egui::PointerButton::Primary, false);
+            d.frames(2, vec![]);
+            let s = d.app.doc.get(id).unwrap();
+            (hex(s.fill.as_ref().and_then(|f| f.solid()).unwrap()), hex(s.stroke.as_ref().unwrap().color))
+        };
+        let (old_fill, old_stroke) = ("#112233".to_string(), "#445566".to_string());
+        let red = "#FF0000".to_string();
+        assert_eq!(run(Some("stroke"), false), (old_fill.clone(), red.clone()), "stroke editor open");
+        assert_eq!(run(Some("fill"), false), (red.clone(), old_stroke.clone()), "fill editor open");
+        assert_eq!(run(None, false), (red.clone(), old_stroke), "nothing open");
+        assert_eq!(run(Some("fill"), true), (old_fill, red), "Shift");
+    }
+
+    #[test]
+    fn alt_click_cycles_through_stacked_layers() {
+        let mut d = Driver::new();
+        d.app.snap = false;
+        let a = d.app.doc.shapes()[0].id;
+        let add = |d: &mut Driver, x: f64| {
+            let mut s = Shape::new(ShapeKind::Rect { w: 100.0, h: 100.0, radii: [0.0; 4] });
+            s.transform = Affine::translate((x, 200.0));
+            d.app.doc.add_shape(s)
+        };
+        let b = add(&mut d, 180.0);
+        let c = add(&mut d, 190.0);
+        d.frames(3, vec![]);
+        let at = d.app.view.to_screen(kurbo::Point::new(220.0, 220.0));
+        d.mods = egui::Modifiers::ALT;
+        d.frame(vec![egui::Event::ModifiersChanged(d.mods)]);
+        d.move_to(at);
+        let shapes = d.app.doc.shapes().len();
+        for want in [c, b, a, c] {
+            d.button(egui::PointerButton::Primary, true);
+            d.button(egui::PointerButton::Primary, false);
+            d.frames(2, vec![]);
+            assert_eq!(d.app.selection, vec![want]);
+        }
+        assert_eq!(d.app.doc.shapes().len(), shapes, "a click duplicates nothing");
+        // Grouped layers are stepped through one by one.
+        {
+            let (mut g, ids) = {
+                let mut g = Driver::new();
+                g.app.snap = false;
+                let a = g.app.doc.shapes()[0].id;
+                let b = add(&mut g, 180.0);
+                let c = add(&mut g, 190.0);
+                g.app.selection = vec![a, b, c];
+                g.app.group_selection();
+                g.frames(3, vec![]);
+                (g, [a, b, c])
+            };
+            let [a, b, c] = ids;
+            let group = g.app.selection[0];
+            assert_ne!(group, c);
+            g.mods = egui::Modifiers::ALT;
+            g.frame(vec![egui::Event::ModifiersChanged(g.mods)]);
+            let at = g.app.view.to_screen(kurbo::Point::new(220.0, 220.0));
+            g.move_to(at);
+            for want in [c, b, a, c] {
+                g.button(egui::PointerButton::Primary, true);
+                g.button(egui::PointerButton::Primary, false);
+                g.frames(2, vec![]);
+                assert_eq!(g.app.selection, vec![want]);
+            }
+        }
+        // Alt+drag still duplicates, and keeps the copy selected.
+        d.drag(at, at + egui::vec2(60.0, 0.0));
+        assert_eq!(d.app.doc.shapes().len(), shapes + 1);
+        assert!(d.app.selection != vec![b] && d.app.selection.len() == 1);
+    }
+
+    #[test]
+    fn dragging_a_covered_selection_moves_it() {
+        let setup = || {
+            let mut d = Driver::new();
+            d.app.snap = false;
+            let below = d.app.doc.shapes()[0].id;
+            let mut top = Shape::new(ShapeKind::Rect { w: 100.0, h: 100.0, radii: [0.0; 4] });
+            top.transform = Affine::translate((200.0, 200.0));
+            let top = d.app.doc.add_shape(top);
+            d.app.selection = vec![below];
+            d.frames(3, vec![]);
+            // Off-centre: the selection's pivot sits at (250, 250).
+            let at = d.app.view.to_screen(kurbo::Point::new(220.0, 220.0));
+            (d, below, top, at)
+        };
+        let x = |d: &Driver, id| d.app.doc.get(id).unwrap().transform.as_coeffs()[4];
+        // A drag moves the selected shape, not the one over it.
+        let (mut d, below, top, at) = setup();
+        d.drag(at, at + egui::vec2(60.0, 0.0));
+        assert_eq!(d.app.selection, vec![below]);
+        assert!(x(&d, below) > 100.5, "{}", x(&d, below));
+        assert_eq!(x(&d, top), 200.0);
+        // A click still selects the shape on top.
+        let (mut d, below, top, at) = setup();
+        d.move_to(at);
+        d.button(egui::PointerButton::Primary, true);
+        d.button(egui::PointerButton::Primary, false);
+        d.frames(2, vec![]);
+        assert_eq!(d.app.selection, vec![top]);
+        assert_eq!(x(&d, below), 100.0);
+        // Pressing the top shape outside the selection selects it at once.
+        let (mut d, below, top, at) = setup();
+        d.app.doc.get_mut(below).unwrap().transform = Affine::translate((-900.0, 100.0));
+        d.frames(2, vec![]);
+        d.drag(at, at + egui::vec2(60.0, 0.0));
+        assert_eq!(d.app.selection, vec![top]);
+        assert!(x(&d, top) > 200.5);
+    }
+
+    #[test]
+    fn scaling_a_sheared_shape_snaps() {
+        // A 300x300 rect at (100, 100), sheared along x; a tall target at x = 600.
+        let run = |local: kurbo::Point, cmd: bool| {
+            let mut d = Driver::new();
+            d.app.snap = true;
+            let id = d.app.doc.shapes()[0].id;
+            let mut sh = d.app.doc.get(id).unwrap().clone();
+            sh.transform = Affine::new([1.0, 0.0, 0.5, 1.0, 100.0, 100.0]);
+            let start = sh.transform * local;
+            d.app.doc.replace(sh);
+            let mut b = Shape::new(ShapeKind::Rect { w: 100.0, h: 700.0, radii: [0.0; 4] });
+            b.transform = Affine::translate((600.0, 37.0));
+            d.app.doc.add_shape(b);
+            d.app.selection = vec![id];
+            d.frames(3, vec![]);
+            let z = d.app.view.zoom as f64;
+            let from = d.app.view.to_screen(start);
+            let to = d.app.view.to_screen(kurbo::Point::new(600.0 - 2.0 / z, start.y));
+            if cmd {
+                d.mods = egui::Modifiers::COMMAND;
+                d.frame(vec![egui::Event::ModifiersChanged(d.mods)]);
+            }
+            d.drag(from, to);
+            assert!(d.app.snap_guides.is_empty(), "guides clear on release");
+            let s = d.app.doc.get(id).unwrap();
+            let ShapeKind::Rect { w, h, .. } = s.kind else { panic!() };
+            (s.transform * kurbo::Point::new(w * local.x / 300.0, h * local.y / 300.0), z)
+        };
+        // East edge handle: it slides along x until it reaches the target.
+        let (p, _) = run(kurbo::Point::new(300.0, 150.0), false);
+        assert!((p.x - 600.0).abs() < 1e-3, "edge {p:?}");
+        // South-east corner.
+        let (p, _) = run(kurbo::Point::new(300.0, 300.0), false);
+        assert!((p.x - 600.0).abs() < 1e-3, "corner {p:?}");
+        // Ctrl turns snapping off.
+        let (p, z) = run(kurbo::Point::new(300.0, 150.0), true);
+        assert!((p.x - 600.0).abs() > 0.5 / z, "ctrl {p:?}");
     }
 
     #[test]

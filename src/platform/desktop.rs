@@ -144,7 +144,11 @@ pub fn install() -> Result<Installed, String> {
         return install_flatpak_thumbnailer(&Path::new(&home).join(".local/share")).map_err(|e| e.to_string());
     }
     let root: PathBuf = dirs::data_dir().ok_or("no data directory")?;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // An AppImage runs from a temporary mount; register the file itself.
+    let exe = match std::env::var_os("APPIMAGE") {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_exe().map_err(|e| e.to_string())?,
+    };
     let out = install_into(&root, &exe).map_err(|e| e.to_string())?;
     if out.mime_changed {
         // Best effort: rebuild the user MIME database so `.mvec` is known.

@@ -296,8 +296,37 @@ fn barycentric(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> (f
     (1.0 - v - w, v, w)
 }
 
+/// The eyedropper and last-picked colour shown in a picker.
+pub struct PickerTools<'a> {
+    pub tip: &'a str,
+    pub last: Option<Rgba>,
+    /// Set when the eyedropper is clicked.
+    pub pick: &'a mut bool,
+}
+
+impl PickerTools<'_> {
+    /// Added right to left. Returns the last-picked colour when clicked.
+    fn show(&mut self, ui: &mut Ui) -> Option<Rgba> {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if widgets::tip(widgets::mini_icon(ui, egui_phosphor::regular::EYEDROPPER, theme::TEXT_DIM), self.tip, Some("I")).clicked() {
+            *self.pick = true;
+        }
+        let last = self.last?;
+        let (rect, resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+        ui.painter().rect_filled(rect, CornerRadius::same(3), last.with_alpha(1.0).to_color32(1.0));
+        ui.painter().rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, Color32::from_white_alpha(if resp.hovered() { 160 } else { 60 })), StrokeKind::Inside);
+        widgets::tip(resp, &format!("Use the last picked colour ({})", last.with_alpha(1.0).to_hex()), None).clicked().then_some(last)
+    }
+}
+
 /// Full color picker with an S/L field, hue strip and HSL or RGB sliders.
 pub fn color_picker(ui: &mut Ui, color: &mut Rgba, id: Id) -> bool {
+    color_picker_with(ui, color, id, None)
+}
+
+/// `color_picker` with the eyedropper: in the wheel's bottom-right corner,
+/// or next to the hex field when the square fills the width.
+pub fn color_picker_with(ui: &mut Ui, color: &mut Rgba, id: Id, mut tools: Option<PickerTools>) -> bool {
     let mut st: PickerState = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
     let cur = [color.r, color.g, color.b, color.a];
     if st.last != Some(cur) {
@@ -320,8 +349,16 @@ pub fn color_picker(ui: &mut Ui, color: &mut Rgba, id: Id) -> bool {
     ui.spacing_mut().item_spacing.y = 6.0;
     let mut prefs = picker_prefs(ui.ctx());
     let before = prefs;
+    let mut reuse = None;
     if prefs.wheel {
         hsl_changed |= hsl_wheel(ui, &mut st.h, &mut st.s, &mut st.l, id);
+        if let Some(t) = &mut tools {
+            let bottom = ui.min_rect().bottom();
+            let right = ui.max_rect().right();
+            let corner = Rect::from_min_max(pos2(right - 44.0, bottom - 18.0), pos2(right, bottom));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(corner).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            reuse = t.show(&mut child);
+        }
     } else {
         // Saturation / lightness field.
         let w = ui.available_width();
@@ -368,7 +405,15 @@ pub fn color_picker(ui: &mut Ui, color: &mut Rgba, id: Id) -> bool {
         widgets::segmented(ui, &mut prefs.wheel, &[(false, egui_phosphor::regular::SQUARE), (true, egui_phosphor::regular::CIRCLE_HALF)]);
         widgets::segmented(ui, &mut prefs.mode, &[(PickerMode::Hsl, "HSL"), (PickerMode::Rgb, "RGB")]);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut st.hex).desired_width(76.0).font(egui::TextStyle::Monospace));
+            if !prefs.wheel {
+                if let Some(t) = &mut tools {
+                    reuse = t.show(ui);
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                }
+            }
+            // The row is tight next to the eyedropper.
+            let font = if !prefs.wheel && tools.is_some() { egui::FontId::monospace(theme::FONT_SM) } else { egui::TextStyle::Monospace.resolve(ui.style()) };
+            let r = ui.add(egui::TextEdit::singleline(&mut st.hex).desired_width(76.0).font(font));
             if r.changed() || r.lost_focus() {
                 if let Some(c) = Rgba::from_hex(&st.hex) {
                     let a = color.a;
@@ -376,7 +421,9 @@ pub fn color_picker(ui: &mut Ui, color: &mut Rgba, id: Id) -> bool {
                     changed = true;
                 }
             }
-            ui.label(egui::RichText::new("Hex").color(theme::TEXT_DIM));
+            if prefs.wheel || tools.is_none() {
+                ui.label(egui::RichText::new("Hex").color(theme::TEXT_DIM));
+            }
         });
     });
 
@@ -412,6 +459,12 @@ pub fn color_picker(ui: &mut Ui, color: &mut Rgba, id: Id) -> bool {
                 changed = true;
             }
         }
+    }
+    if let Some(c) = reuse {
+        *color = c;
+        let (nh, ns, nl) = rgb_to_hsl(c);
+        (st.h, st.s, st.l) = (nh, ns, nl);
+        changed = true;
     }
     let base = *color;
     let mut a = color.a;
