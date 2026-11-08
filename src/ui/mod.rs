@@ -8,6 +8,7 @@ pub mod paint_dialogs;
 pub mod welcome;
 pub mod window;
 pub mod export;
+mod export_preview;
 pub mod menubar;
 pub mod palette;
 pub mod rulers;

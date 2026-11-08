@@ -328,6 +328,8 @@ pub struct App {
     pub paste_count: u32,
     pub style_clip: Option<StyleClip>,
     pub canvas_rect: egui::Rect,
+    /// Window size last frame, to follow resizes.
+    pub window_size: egui::Vec2,
     pub cursor_doc: Option<Point>,
     pub corner_radius_ui: f64,
     /// Artboard the panel edits and exports target (see [`App::active`]).
@@ -486,6 +488,7 @@ impl App {
             paste_count: 0,
             style_clip: None,
             canvas_rect: egui::Rect::NOTHING,
+            window_size: egui::Vec2::ZERO,
             cursor_doc: None,
             corner_radius_ui: 16.0,
             active_artboard: 0,

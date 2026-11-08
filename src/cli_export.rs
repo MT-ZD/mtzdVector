@@ -26,7 +26,7 @@ Output
 Raster
   -s, --scale N         pixels per document pixel (default 1)
   --transparent         no artboard background (PNG, WebP, AVIF)
-  -q, --quality N       JPG / AVIF quality 1-100 (default 90)
+  -q, --quality N       JPG / AVIF quality 1-100 (default 90); makes WebP lossy
 
 Vector
   --outline-text        text as outlines (SVG, PDF)
@@ -79,7 +79,10 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--slices" => a.slices = true,
             "-s" | "--scale" => a.opts.scale = value(&mut i, arg)?.trim_end_matches(['x', 'X']).parse::<f64>().ok().filter(|s| *s > 0.0 && *s <= 64.0).ok_or("--scale takes a number from 0 to 64")?,
             "--transparent" => a.opts.background = false,
-            "-q" | "--quality" => a.opts.quality = value(&mut i, arg)?.parse::<u8>().ok().filter(|q| (1..=100).contains(q)).ok_or("--quality takes 1 to 100")?,
+            "-q" | "--quality" => {
+                a.opts.quality = value(&mut i, arg)?.parse::<u8>().ok().filter(|q| (1..=100).contains(q)).ok_or("--quality takes 1 to 100")?;
+                a.opts.webp_lossy = true;
+            }
             "--outline-text" => a.opts.text_outlines = true,
             "--precision" => a.opts.svg.precision = value(&mut i, arg)?.parse::<usize>().ok().filter(|p| *p <= 8).ok_or("--precision takes 0 to 8")?,
             "--minify" => a.opts.svg.minify = true,

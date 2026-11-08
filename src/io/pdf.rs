@@ -21,6 +21,52 @@ pub struct PdfOptions {
     pub real_text: bool,
     pub print: PrintOptions,
     pub title: String,
+    pub settings: PdfSettings,
+}
+
+/// Quality and metadata of a PDF export.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PdfSettings {
+    /// Resolution of rasterized effects (blur, shadows, masks).
+    pub effect_dpi: f64,
+    /// Downsample images placed above this resolution (None: keep every pixel).
+    pub image_ppi: Option<u32>,
+    /// JPEG-compress RGB images at this quality (None: lossless).
+    pub jpeg_quality: Option<u8>,
+    /// Empty: the file name.
+    pub title: String,
+    pub author: String,
+    pub subject: String,
+    pub keywords: String,
+}
+
+impl Default for PdfSettings {
+    fn default() -> Self {
+        PdfSettings { effect_dpi: EFFECT_DPI, image_ppi: None, jpeg_quality: None, title: String::new(), author: String::new(), subject: String::new(), keywords: String::new() }
+    }
+}
+
+/// Share of each image's pixels needed at `ppi`, from its largest placement
+/// (1.0: keep them all; tiled images always are).
+fn image_keep(items: &[super::Item], doc: &Document, ppi: f64) -> BTreeMap<u64, f64> {
+    let mut keep: BTreeMap<u64, f64> = BTreeMap::new();
+    for item in items {
+        let Some(Paint::Image(f)) = &item.shape.fill else { continue };
+        let Some(asset) = doc.images.get(&f.image) else { continue };
+        let need = if f.mode == ImageMode::Tile {
+            1.0
+        } else {
+            let s: &Shape = &item.shape;
+            let (iw, ih) = (asset.width as f64, asset.height as f64);
+            let r = render::image_rect(f.mode, render::shape_local_bounds(s, &item.path), iw, ih);
+            let [a, b, c, d, ..] = s.transform.as_coeffs();
+            let per_px = ppi / doc.dpi.max(1.0);
+            (r.width() * a.hypot(b) * per_px / iw).max(r.height() * c.hypot(d) * per_px / ih).min(1.0)
+        };
+        let e = keep.entry(f.image).or_insert(0.0);
+        *e = e.max(need);
+    }
+    keep
 }
 
 /// How colours are written: RGB, or CMYK through a converter; spot colours
@@ -139,14 +185,20 @@ fn apply_stroke_style(c: &mut Content, s: &Stroke, ink: &Ink, key: Option<u64>) 
 }
 
 /// Write an RGBA8 image as an RGB XObject with an alpha soft mask.
-fn write_rgba(pdf: &mut Pdf, r: Ref, mask: Option<Ref>, rgba: &[u8], w: usize, h: usize, conv: Option<&ColorConv>) {
+fn write_rgba(pdf: &mut Pdf, r: Ref, mask: Option<Ref>, rgba: &[u8], w: usize, h: usize, conv: Option<&ColorConv>, jpeg: Option<u8>) {
     let (px, cmyk) = match conv {
         Some(cv) => (cv.cmyk8(rgba), true),
         None => (rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect(), false),
     };
-    let data = deflate(&px);
-    let mut x = pdf.image_xobject(r, &data);
-    x.filter(Filter::FlateDecode);
+    let flate = deflate(&px);
+    // JPEG only where it wins: flat artwork is often smaller as Flate.
+    let dct = jpeg.filter(|_| !cmyk).and_then(|q| {
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q).encode(&px, w as u32, h as u32, image::ExtendedColorType::Rgb8).ok()?;
+        (out.len() < flate.len()).then_some(out)
+    });
+    let mut x = pdf.image_xobject(r, dct.as_deref().unwrap_or(&flate));
+    x.filter(if dct.is_some() { Filter::DctDecode } else { Filter::FlateDecode });
     x.width(w as i32);
     x.height(h as i32);
     if cmyk {
@@ -352,6 +404,7 @@ pub fn export_pdf(pages: &[Document], fonts: &mut FontManager, opts: &PdfOptions
 
     // Image XObjects.
     let mut image_refs: BTreeMap<u64, (Ref, String)> = BTreeMap::new();
+    let keep = opts.settings.image_ppi.map(|ppi| image_keep(&items, doc, ppi as f64)).unwrap_or_default();
     for item in &items {
         if let Some(Paint::Image(f)) = &item.shape.fill {
             if image_refs.contains_key(&f.image) {
@@ -362,13 +415,22 @@ pub fn export_pdf(pages: &[Document], fonts: &mut FontManager, opts: &PdfOptions
             let (r, name) = (alloc(), format!("Im{}", image_refs.len()));
             let has_alpha = rgba.chunks(4).any(|p| p[3] < 255);
             let mask_ref = if has_alpha { Some(alloc()) } else { None };
-            write_rgba(&mut pdf, r, mask_ref, rgba, asset.width as usize, asset.height as usize, conv);
+            let (mut w, mut h) = (asset.width, asset.height);
+            let share = keep.get(&f.image).copied().unwrap_or(1.0);
+            // A small excess isn't worth a resampling pass.
+            let smaller = (share < 0.9).then(|| image::RgbaImage::from_raw(w, h, rgba.to_vec())).flatten().map(|img| {
+                w = ((w as f64 * share).ceil() as u32).max(1);
+                h = ((h as f64 * share).ceil() as u32).max(1);
+                image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle)
+            });
+            let pixels: &[u8] = smaller.as_ref().map_or(&rgba[..], |i| i.as_raw());
+            write_rgba(&mut pdf, r, mask_ref, pixels, w as usize, h as usize, conv, opts.settings.jpeg_quality);
             image_refs.insert(f.image, (r, name));
         }
     }
 
     // Rasterized effects: (xobject name, document rect, whole shape?) per item.
-    let fx_scale = EFFECT_DPI / doc.dpi.max(1.0);
+    let fx_scale = opts.settings.effect_dpi.max(1.0) / doc.dpi.max(1.0);
     let mut rasters: Vec<Option<(String, kurbo::Rect, bool)>> = Vec::new();
     for (idx, item) in items.iter().enumerate() {
         let s: &Shape = &item.shape;
@@ -388,7 +450,7 @@ pub fn export_pdf(pages: &[Document], fonts: &mut FontManager, opts: &PdfOptions
         rasters.push(r.map(|r| {
             let (id, mask) = (alloc(), alloc());
             let name = format!("Fx{}", rasters.len());
-            write_rgba(&mut pdf, id, Some(mask), &r.rgba, r.w, r.h, conv);
+            write_rgba(&mut pdf, id, Some(mask), &r.rgba, r.w, r.h, conv, None);
             image_refs.insert(u64::MAX - rasters.len() as u64, (id, name.clone()));
             (name, r.rect, full)
         }));
@@ -758,7 +820,8 @@ pub fn export_pdf(pages: &[Document], fonts: &mut FontManager, opts: &PdfOptions
         sep.tint_exponential().domain([0.0, 1.0]).c0([0.0; 4]).c1([1.0; 4]).n(1.0);
     }
     let pdfx = if po.pdfx { conv.and_then(|c| c.icc.clone().map(|icc| (icc, c.name.clone()))) } else { None };
-    let (icc_ref, meta_ref, info_ref) = if pdfx.is_some() { (Some(alloc()), Some(alloc()), Some(alloc())) } else { (None, None, None) };
+    let (icc_ref, meta_ref) = if pdfx.is_some() { (Some(alloc()), Some(alloc())) } else { (None, None) };
+    let info_ref = alloc();
     let now = Stamp::now();
     let title = if opts.title.is_empty() { "Untitled".to_string() } else { opts.title.clone() };
     let producer = format!("mtzdVector {}", env!("CARGO_PKG_VERSION"));
@@ -767,19 +830,32 @@ pub fn export_pdf(pages: &[Document], fonts: &mut FontManager, opts: &PdfOptions
         pdf.icc_profile(r, &data).n(4).filter(Filter::FlateDecode);
     }
     if let (Some(r), true) = (meta_ref, pdfx.is_some()) {
-        let xmp = now.xmp(&title, &producer);
+        let xmp = now.xmp(&title, &producer, &opts.settings);
         pdf.metadata(r, xmp.as_bytes());
     }
-    if let Some(r) = info_ref {
-        let mut info = pdf.document_info(r);
+    {
+        let mut info = pdf.document_info(info_ref);
         info.title(pdf_writer::TextStr(&title));
         info.producer(pdf_writer::TextStr(&producer));
         info.creator(pdf_writer::TextStr("mtzdVector"));
         info.creation_date(now.date());
         info.modified_date(now.date());
-        info.trapped(pdf_writer::types::TrappingStatus::NotTrapped);
-        info.pair(Name(b"GTS_PDFXVersion"), pdf_writer::Str(b"PDF/X-4"));
-        info.finish();
+        let st = &opts.settings;
+        if !st.author.is_empty() {
+            info.author(pdf_writer::TextStr(&st.author));
+        }
+        if !st.subject.is_empty() {
+            info.subject(pdf_writer::TextStr(&st.subject));
+        }
+        if !st.keywords.is_empty() {
+            info.keywords(pdf_writer::TextStr(&st.keywords));
+        }
+        if pdfx.is_some() {
+            info.trapped(pdf_writer::types::TrappingStatus::NotTrapped);
+            info.pair(Name(b"GTS_PDFXVersion"), pdf_writer::Str(b"PDF/X-4"));
+        }
+    }
+    if pdfx.is_some() {
         let id = now.id(&title);
         pdf.set_file_id((id.clone(), id));
     }
@@ -863,9 +939,20 @@ impl Stamp {
         format!("uuid:{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
     }
 
-    fn xmp(&self, title: &str, producer: &str) -> String {
+    fn xmp(&self, title: &str, producer: &str, st: &PdfSettings) -> String {
         let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
         let date = self.iso();
+        // These must match the Info dictionary for PDF/X.
+        let mut extra = String::new();
+        if !st.author.is_empty() {
+            extra += &format!("<dc:creator><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></dc:creator>\n", esc(&st.author));
+        }
+        if !st.subject.is_empty() {
+            extra += &format!("<dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:description>\n", esc(&st.subject));
+        }
+        if !st.keywords.is_empty() {
+            extra += &format!("<pdf:Keywords>{}</pdf:Keywords>\n", esc(&st.keywords));
+        }
         format!(
             "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
 <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
@@ -873,7 +960,7 @@ impl Stamp {
 <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\" xmlns:xmpMM=\"http://ns.adobe.com/xap/1.0/mm/\" xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\">\n\
 <dc:format>application/pdf</dc:format>\n\
 <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{title}</rdf:li></rdf:Alt></dc:title>\n\
-<xmp:CreateDate>{date}</xmp:CreateDate>\n<xmp:ModifyDate>{date}</xmp:ModifyDate>\n<xmp:MetadataDate>{date}</xmp:MetadataDate>\n\
+{extra}<xmp:CreateDate>{date}</xmp:CreateDate>\n<xmp:ModifyDate>{date}</xmp:ModifyDate>\n<xmp:MetadataDate>{date}</xmp:MetadataDate>\n\
 <xmp:CreatorTool>mtzdVector</xmp:CreatorTool>\n\
 <pdf:Producer>{producer}</pdf:Producer>\n<pdf:Trapped>False</pdf:Trapped>\n\
 <xmpMM:DocumentID>{doc}</xmpMM:DocumentID>\n<xmpMM:InstanceID>{inst}</xmpMM:InstanceID>\n<xmpMM:VersionID>1</xmpMM:VersionID>\n<xmpMM:RenditionClass>default</xmpMM:RenditionClass>\n\

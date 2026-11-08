@@ -154,7 +154,8 @@ those settings before, tick **mtzdVector** under
 - Multiple artboards, clip masks, tabs, autosave, crash recovery and atomic saves with an optional backup.
 - **Print:** CMYK PDF through an ICC profile (installed profiles are found automatically), spot colours as separations, exact CMYK values per colour key, bleed, crop marks, PDF/X-4, and File › Print through the desktop print dialog.
 - **Import:** SVG, PDF (at true size), Illustrator (`.ai`, PDF-based or PostScript via Ghostscript), EPS and images.
-- **Export:** PNG, JPG, WebP (lossless), AVIF, SVG (precision, ids, minify, responsive), PDF (one page per artboard), EPS and DXF (R12 polylines in mm, for cutters and CAD).
+- **Export:** PNG, JPG, WebP (lossless or lossy), AVIF, SVG (precision, ids, minify, responsive), PDF (one page per artboard), EPS and DXF (R12 polylines in mm, for cutters and CAD).
+- **Export dialog:** a live preview with the exact file size, bleed and crop marks, and CMYK colours as the output profile reproduces them. PDF presets for Web, Standard, Print (CMYK, 3 mm bleed) and Press (PDF/X-4, bleed, crop marks), plus image resolution, compression, effect resolution and metadata.
 - **Export slices:** give any layer or artboard export settings (for example @1x, @2x and @3x PNG plus an SVG) in the Design panel, then write them all with File › Export Slices or `--export --slices`.
 
 ### Finding things

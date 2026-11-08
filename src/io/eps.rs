@@ -212,7 +212,7 @@ pub fn import(path: &Path) -> Result<Document, String> {
 }
 
 /// A new directory only this user can access.
-fn private_temp_dir() -> Result<std::path::PathBuf, String> {
+pub(super) fn private_temp_dir() -> Result<std::path::PathBuf, String> {
     use std::os::unix::fs::DirBuilderExt;
     let base = std::env::temp_dir();
     for i in 0..100u32 {

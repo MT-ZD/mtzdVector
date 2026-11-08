@@ -504,6 +504,7 @@ mod app_tests {
         mods: egui::Modifiers,
         /// Viewport commands sent during the last frame.
         cmds: Vec<egui::ViewportCommand>,
+        window: egui::Vec2,
     }
 
     impl Driver {
@@ -518,14 +519,14 @@ mod app_tests {
                 (app, ia, 0)
             };
             app.selection.clear();
-            let mut d = Driver { ctx, app, t: 0.0, pos: egui::pos2(1.0, 1.0), mods: Default::default(), cmds: vec![] };
+            let mut d = Driver { ctx, app, t: 0.0, pos: egui::pos2(1.0, 1.0), mods: Default::default(), cmds: vec![], window: egui::vec2(1600.0, 1000.0) };
             d.frames(12, vec![]);
             d
         }
         fn frame(&mut self, events: Vec<egui::Event>) {
             self.t += 1.0 / 30.0;
             let raw = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.window)),
                 time: Some(self.t),
                 focused: true,
                 events,
@@ -1801,6 +1802,17 @@ mod app_tests {
         assert_eq!(run(Some("fill"), false), (red.clone(), old_stroke.clone()), "fill editor open");
         assert_eq!(run(None, false), (red.clone(), old_stroke), "nothing open");
         assert_eq!(run(Some("fill"), true), (old_fill, red), "Shift");
+    }
+
+    #[test]
+    fn window_resize_keeps_the_view_centred() {
+        let mut d = Driver::new();
+        d.frames(3, vec![]);
+        let centre = d.app.view.to_doc(d.app.canvas_rect.center());
+        d.window = egui::vec2(2560.0, 1440.0);
+        d.frames(3, vec![]);
+        let after = d.app.view.to_doc(d.app.canvas_rect.center());
+        assert!((centre - after).hypot() < 1.0, "{centre:?} -> {after:?}");
     }
 
     #[test]

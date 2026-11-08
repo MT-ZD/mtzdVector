@@ -169,6 +169,12 @@ impl App {
     pub fn canvas(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
         let stable = (self.canvas_rect.size() - rect.size()).length() < 0.5;
+        // Resizing the window (fullscreen, maximize) keeps the view centred.
+        let window = ui.ctx().content_rect().size();
+        if window != self.window_size && self.window_size.x > 0.0 && self.canvas_rect.width() > 10.0 {
+            self.view.origin += rect.center() - self.canvas_rect.center();
+        }
+        self.window_size = window;
         self.canvas_rect = rect;
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
         ui.input(|i| {

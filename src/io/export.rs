@@ -16,7 +16,7 @@ pub enum Format {
     Svg,
     Pdf,
     Eps,
-    /// Lossless WebP.
+    /// Lossless, or lossy with `Options::webp_lossy`.
     Webp,
     Avif,
     /// AutoCAD drawing exchange (outlines as polylines).
@@ -80,19 +80,149 @@ pub struct Options {
     pub scale: f64,
     /// PNG: keep the artboard background (otherwise transparent).
     pub background: bool,
-    /// JPG quality 1..100.
+    /// JPG, AVIF and lossy WebP quality 1..100.
     pub quality: u8,
+    /// WebP: lossy at `quality` (otherwise lossless).
+    pub webp_lossy: bool,
     /// SVG / PDF: text as outlines rather than real (selectable) text.
     pub text_outlines: bool,
     /// PDF: CMYK, PDF/X, bleed and crop marks.
     pub print: crate::print::PrintOptions,
     /// SVG: precision, ids, minify, responsive (`real_text` comes from `text_outlines`).
     pub svg: super::svg::SvgOptions,
+    /// PDF: image quality and metadata.
+    pub pdf: super::pdf::PdfSettings,
+}
+
+/// Starting points for PDF settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PdfPreset {
+    /// Small files for sharing on screen.
+    Web,
+    /// Full quality RGB.
+    Standard,
+    /// CMYK with bleed, for online printers.
+    Print,
+    /// PDF/X-4 with bleed and crop marks, for print shops.
+    Press,
+}
+
+impl PdfPreset {
+    pub const ALL: [PdfPreset; 4] = [PdfPreset::Web, PdfPreset::Standard, PdfPreset::Print, PdfPreset::Press];
+
+    /// Set the quality and print options, keeping metadata and a chosen profile.
+    pub fn apply(self, o: &mut Options) {
+        use crate::print::{ColorOutput, PrintOptions, cmyk_profiles};
+        let chosen = o.print.profile.clone();
+        let press_profile = || chosen.clone().or_else(|| cmyk_profiles().first().map(|p| p.path.clone()));
+        o.text_outlines = false;
+        (o.pdf.effect_dpi, o.pdf.image_ppi, o.pdf.jpeg_quality) = match self {
+            PdfPreset::Web => (150.0, Some(150), Some(75)),
+            PdfPreset::Standard => (300.0, None, None),
+            PdfPreset::Print | PdfPreset::Press => (300.0, Some(300), None),
+        };
+        o.print = match self {
+            PdfPreset::Web | PdfPreset::Standard => PrintOptions { profile: chosen.clone(), ..Default::default() },
+            PdfPreset::Print => PrintOptions { color: ColorOutput::Cmyk, profile: press_profile(), bleed_mm: 3.0, ..Default::default() },
+            PdfPreset::Press => {
+                let profile = press_profile();
+                PrintOptions { color: ColorOutput::Cmyk, pdfx: profile.is_some(), profile, bleed_mm: 3.0, crop_marks: true }
+            }
+        };
+    }
+
+    /// The preset `o` is exactly on, if any.
+    pub fn of(o: &Options) -> Option<PdfPreset> {
+        PdfPreset::ALL.into_iter().find(|p| {
+            let mut x = o.clone();
+            p.apply(&mut x);
+            x == *o
+        })
+    }
+}
+
+/// One rendered page for the export preview.
+pub struct PreviewPage {
+    /// The trim area plus any bleed.
+    pub image: image::RgbaImage,
+    /// Trim size in document px.
+    pub size: (f64, f64),
+    /// Bleed in document px.
+    pub bleed: f64,
+    pub dpi: f64,
+    pub pages: usize,
+}
+
+fn keeps_background(opts: &Options) -> bool {
+    !(matches!(opts.format, Format::Png | Format::Webp | Format::Avif) && !opts.background)
+}
+
+/// Longest side of a preview, in pixels.
+const PREVIEW_PX: f64 = 1000.0;
+
+/// Render page `page` of the export as it will come out: PDF bleed included,
+/// CMYK colours as the output profile reproduces them.
+pub fn preview_page(doc: &Document, selection: &[u64], active: u64, opts: &Options, page: usize, fonts: &mut FontManager) -> Result<PreviewPage, String> {
+    let keep = keeps_background(opts);
+    let pages = if opts.area == Area::AllArtboards { doc.artboards.len().max(1) } else { 1 };
+    let mut d = match opts.area {
+        Area::Selection => selection_document(doc, selection, fonts, keep).ok_or("Nothing selected to export")?,
+        Area::Artboard => doc.page(doc.artboard(active).map(|a| a.id).unwrap_or(doc.primary().id)),
+        Area::AllArtboards => doc.page(doc.artboards[page.min(pages - 1)].id),
+    };
+    if !keep {
+        d.primary_mut().background = Rgba::WHITE.with_alpha(0.0);
+    }
+    let pdf = opts.format == Format::Pdf;
+    let bleed = if pdf { opts.print.bleed_mm.max(0.0) * d.dpi.max(1.0) / 25.4 } else { 0.0 };
+    let size = (d.primary().w, d.primary().h);
+    let a = d.primary_mut();
+    a.x -= bleed;
+    a.y -= bleed;
+    a.w += 2.0 * bleed;
+    a.h += 2.0 * bleed;
+    let scale = (PREVIEW_PX / d.primary().w.max(d.primary().h).max(1.0)).min(4.0);
+    let mut image = rasterize(&d, fonts, scale)?;
+    if pdf {
+        if let Some(conv) = opts.print.converter()? {
+            soft_proof(&mut image, &conv);
+        }
+    }
+    Ok(PreviewPage { image, size, bleed, dpi: d.dpi.max(1.0), pages })
+}
+
+/// Replace colours with what they become through `conv`'s CMYK.
+fn soft_proof(image: &mut image::RgbaImage, conv: &crate::print::ColorConv) {
+    let mut seen: std::collections::HashMap<[u8; 3], [u8; 3]> = std::collections::HashMap::new();
+    for p in image.pixels_mut() {
+        // 6 bits a channel: invisible here, and keeps ICC lookups few.
+        let key = [p[0] & 0xFC, p[1] & 0xFC, p[2] & 0xFC];
+        let out = *seen.entry(key).or_insert_with(|| {
+            let v = |c: u8| (c | 2) as f32 / 255.0;
+            let c = conv.rgb(conv.cmyk(Rgba { r: v(key[0]), g: v(key[1]), b: v(key[2]), a: 1.0 }));
+            let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            [b(c.r), b(c.g), b(c.b)]
+        });
+        p.0[..3].copy_from_slice(&out);
+    }
+}
+
+/// Total bytes the export would write, or None for very large rasters.
+pub fn exported_size(doc: &Document, selection: &[u64], active: u64, opts: &Options, fonts: &mut FontManager) -> Result<Option<u64>, String> {
+    let (w, h) = raster_size(doc.primary(), None, opts.scale);
+    if opts.format.is_raster() && (w as u64) * (h as u64) > 40_000_000 {
+        return Ok(None);
+    }
+    let dir = super::eps::private_temp_dir()?;
+    let path = dir.join(format!("export.{}", opts.format.ext()));
+    let out = export(doc, selection, active, opts, &path, fonts).map(|files| files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum());
+    let _ = std::fs::remove_dir_all(&dir);
+    out.map(Some)
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { format: Format::Png, area: Area::Artboard, scale: 2.0, background: true, quality: 90, text_outlines: false, print: Default::default(), svg: Default::default() }
+        Options { format: Format::Png, area: Area::Artboard, scale: 1.0, background: true, quality: 90, webp_lossy: false, text_outlines: false, print: Default::default(), svg: Default::default(), pdf: Default::default() }
     }
 }
 
@@ -188,7 +318,7 @@ pub fn artboard_path(path: &Path, artboard: &str) -> std::path::PathBuf {
 /// Export `doc` to `path` with `opts`: the artboard `active`, every
 /// artboard, or the shapes `selection`. Returns the files written.
 pub fn export(doc: &Document, selection: &[u64], active: u64, opts: &Options, path: &Path, fonts: &mut FontManager) -> Result<Vec<std::path::PathBuf>, String> {
-    let keep_bg = !(matches!(opts.format, Format::Png | Format::Webp | Format::Avif) && !opts.background);
+    let keep_bg = keeps_background(opts);
     let prep = |mut d: Document| {
         if !keep_bg {
             d.primary_mut().background = Rgba::WHITE.with_alpha(0.0);
@@ -224,8 +354,8 @@ pub fn export(doc: &Document, selection: &[u64], active: u64, opts: &Options, pa
 }
 
 fn pdf_options(opts: &Options, path: &Path) -> super::pdf::PdfOptions {
-    let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    super::pdf::PdfOptions { real_text: !opts.text_outlines, print: opts.print.clone(), title }
+    let title = if opts.pdf.title.is_empty() { path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() } else { opts.pdf.title.clone() };
+    super::pdf::PdfOptions { real_text: !opts.text_outlines, print: opts.print.clone(), title, settings: opts.pdf.clone() }
 }
 
 /// Write a single-page document (first artboard at the origin).
@@ -257,7 +387,12 @@ fn write_one(src: &Document, opts: &Options, path: &Path, fonts: &mut FontManage
         }
         Format::Webp => {
             let img = rasterize(src, fonts, opts.scale)?;
-            img.save_with_format(path, image::ImageFormat::WebP).map_err(|e| e.to_string())
+            if opts.webp_lossy {
+                let data = webp::Encoder::from_rgba(img.as_raw(), img.width(), img.height()).encode_simple(false, opts.quality.clamp(1, 100) as f32).map_err(|e| format!("WebP encoding failed: {e:?}"))?;
+                write(data.to_vec())
+            } else {
+                img.save_with_format(path, image::ImageFormat::WebP).map_err(|e| e.to_string())
+            }
         }
         Format::Avif => {
             let img = rasterize(src, fonts, opts.scale)?;

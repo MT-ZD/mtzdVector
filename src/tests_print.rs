@@ -113,3 +113,112 @@ fn stamp_dates() {
     assert_eq!(crate::io::pdf::stamp_iso(0), "1970-01-01T00:00:00Z");
     assert_eq!(crate::io::pdf::stamp_iso(951_782_400), "2000-02-29T00:00:00Z");
 }
+
+mod export_settings {
+    use super::*;
+    use crate::document::{ImageAsset, ImageFill, ImageMode};
+    use crate::io::export::{self, Area, Format, Options, PdfPreset};
+    use crate::io::pdf::PdfSettings;
+
+    /// A 1 inch square (at 96 dpi) showing a noisy 1000 px image.
+    fn doc_with_image() -> Document {
+        let mut d = Document::default();
+        let mut v = 7u32;
+        let px: Vec<u8> = (0..1000 * 1000)
+            .flat_map(|_| {
+                v = v.wrapping_mul(2_654_435_761).wrapping_add(1);
+                [(v >> 24) as u8, (v >> 16) as u8, 128, 255]
+            })
+            .collect();
+        let image = d.add_image(ImageAsset { width: 1000, height: 1000, encoded: vec![], rgba: Some(std::sync::Arc::new(px)) });
+        let mut s = Shape::new(ShapeKind::Rect { w: 96.0, h: 96.0, radii: [0.0; 4] });
+        s.fill = Some(Paint::Image(ImageFill { image, mode: ImageMode::Stretch, scale: 1.0, opacity: 1.0 }));
+        d.add_shape(s);
+        d.dpi = 96.0;
+        d
+    }
+
+    fn pdf(d: &Document, settings: PdfSettings) -> Vec<u8> {
+        export_pdf(&[d.clone()], &mut fonts(), &PdfOptions { settings, ..Default::default() }).unwrap()
+    }
+
+    fn has(data: &[u8], what: &[u8]) -> bool {
+        data.windows(what.len()).any(|w| w == what)
+    }
+
+    #[test]
+    fn images_are_downsampled_and_compressed() {
+        let d = doc_with_image();
+        let full = pdf(&d, PdfSettings::default());
+        assert!(has(&full, b"/Width 1000") && !has(&full, b"/DCTDecode"));
+        let small = pdf(&d, PdfSettings { image_ppi: Some(150), ..Default::default() });
+        assert!(has(&small, b"/Width 150"), "150 ppi over one inch");
+        assert!(small.len() * 10 < full.len(), "{} vs {}", small.len(), full.len());
+        let jpeg = pdf(&d, PdfSettings { image_ppi: Some(150), jpeg_quality: Some(50), ..Default::default() });
+        assert!(has(&jpeg, b"/DCTDecode") && jpeg.len() < small.len());
+    }
+
+    #[test]
+    fn webp_quality_changes_the_file() {
+        let d = doc_with_image();
+        let dir = std::env::temp_dir().join(format!("mtzd-webp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut f = fonts();
+        let active = d.primary().id;
+        let mut size = |lossy: bool, quality: u8| {
+            let p = dir.join(format!("{lossy}{quality}.webp"));
+            let o = Options { format: Format::Webp, scale: 1.0, webp_lossy: lossy, quality, ..Default::default() };
+            export::export(&d, &[], active, &o, &p, &mut f).unwrap();
+            let bytes = std::fs::read(&p).unwrap();
+            assert_eq!(image::guess_format(&bytes).unwrap(), image::ImageFormat::WebP);
+            assert!(image::load_from_memory(&bytes).is_ok(), "decodes");
+            bytes.len()
+        };
+        let (lossless, high, low) = (size(false, 90), size(true, 95), size(true, 5));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(low < high && high < lossless, "{low} {high} {lossless}");
+    }
+
+    #[test]
+    fn metadata_is_written() {
+        let d = Document::default();
+        let out = pdf(&d, PdfSettings { author: "Ada".into(), subject: "Proof".into(), keywords: "a, b".into(), ..Default::default() });
+        for w in [&b"(Ada)"[..], b"(Proof)", b"(a, b)"] {
+            assert!(has(&out, w), "{}", String::from_utf8_lossy(w));
+        }
+    }
+
+    #[test]
+    fn presets_are_recognised_and_keep_metadata() {
+        let mut o = Options { format: Format::Pdf, ..Default::default() };
+        assert_eq!(PdfPreset::of(&o), Some(PdfPreset::Standard), "the default");
+        o.pdf.author = "Ada".into();
+        for p in PdfPreset::ALL {
+            p.apply(&mut o);
+            assert_eq!(PdfPreset::of(&o), Some(p));
+            assert_eq!(o.pdf.author, "Ada");
+        }
+        assert_eq!(o.print.bleed_mm, 3.0);
+        assert!(o.print.crop_marks);
+        assert_eq!(o.print.pdfx, o.print.profile.is_some());
+        o.pdf.effect_dpi = 600.0;
+        assert_eq!(PdfPreset::of(&o), None, "edited: custom");
+    }
+
+    #[test]
+    fn preview_includes_bleed_and_size_is_measured() {
+        let mut d = Document::default();
+        d.dpi = 96.0;
+        let active = d.primary().id;
+        let (w, h) = (d.primary().w, d.primary().h);
+        let mut o = Options { format: Format::Pdf, area: Area::Artboard, ..Default::default() };
+        o.print.bleed_mm = 25.4;
+        let mut f = fonts();
+        let p = export::preview_page(&d, &[], active, &o, 0, &mut f).unwrap();
+        assert_eq!(p.size, (w, h));
+        assert!((p.bleed - 96.0).abs() < 1e-6);
+        let ratio = p.image.width() as f64 / p.image.height() as f64;
+        assert!((ratio - (w + 192.0) / (h + 192.0)).abs() < 0.01, "{ratio}");
+        assert!(export::exported_size(&d, &[], active, &o, &mut f).unwrap().unwrap() > 100);
+    }
+}
