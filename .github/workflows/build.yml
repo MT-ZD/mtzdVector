@@ -1,5 +1,6 @@
-# Linux packages (tarball, AppImage, Flatpak), published on a GitHub Release
-# when a tag like v0.1.0 is pushed. Running it by hand leaves them as
+# Linux packages (tarball, AppImage, Flatpak), added to the GitHub Release
+# when a tag like v0.1.0 appears (the release is created if there is none).
+# Running it by hand leaves them as
 # workflow artifacts instead.
 name: Build
 
@@ -91,7 +92,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Create the release
+      - name: Add the packages to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+        run: |
+          # A release made on GitHub creates the tag first, so it may exist already.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+          fi
