@@ -1,10 +1,10 @@
-# Linux packages (tarball, AppImage, Flatpak): every push to main leaves them as workflow artifacts;
-# pushing a tag like v0.1.0 publishes them on a GitHub Release.
+# Linux packages (tarball, AppImage, Flatpak), published on a GitHub Release
+# when a tag like v0.1.0 is pushed. Running it by hand leaves them as
+# workflow artifacts instead.
 name: Build
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
