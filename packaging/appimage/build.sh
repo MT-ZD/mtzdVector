@@ -30,7 +30,6 @@ ln -s "usr/share/applications/$APP_ID.desktop" "$appdir/$APP_ID.desktop"
 ln -s "usr/share/icons/hicolor/256x256/apps/$APP_ID.png" "$appdir/$APP_ID.png"
 
 # Pinned tools; APPIMAGE_TOOLS can name a directory already holding them.
-base=https://github.com/AppImage
 case "$arch" in
     x86_64)
         tool_sum=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
@@ -42,16 +41,19 @@ case "$arch" in
         ;;
     *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
 esac
-fetch() { # file-name url sha256
+fetch() { # repo tag file-name sha256
     if [[ -n "${APPIMAGE_TOOLS:-}" ]]; then
-        cp "$APPIMAGE_TOOLS/$1" "$work/$1"
+        cp "$APPIMAGE_TOOLS/$3" "$work/$3"
+    elif command -v gh >/dev/null; then
+        # Through the API: direct release URLs have been answering 504.
+        gh release download "$2" --repo "AppImage/$1" --pattern "$3" --dir "$work"
     else
-        curl -fsSL --retry 5 --retry-all-errors -o "$work/$1" "$2"
+        curl -fsSL --retry 5 --retry-all-errors -o "$work/$3" "https://github.com/AppImage/$1/releases/download/$2/$3"
     fi
-    echo "$3  $work/$1" | sha256sum -c --quiet
+    echo "$4  $work/$3" | sha256sum -c --quiet
 }
-fetch "appimagetool-$arch.AppImage" "$base/appimagetool/releases/download/1.9.1/appimagetool-$arch.AppImage" "$tool_sum"
-fetch "runtime-$arch" "$base/type2-runtime/releases/download/20251108/runtime-$arch" "$runtime_sum"
+fetch appimagetool 1.9.1 "appimagetool-$arch.AppImage" "$tool_sum"
+fetch type2-runtime 20251108 "runtime-$arch" "$runtime_sum"
 tool="$work/appimagetool-$arch.AppImage"
 chmod +x "$tool"
 # Extract instead of mounting: containers and CI have no FUSE.

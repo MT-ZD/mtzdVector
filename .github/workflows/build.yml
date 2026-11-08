@@ -31,6 +31,8 @@ jobs:
       - name: Smoke test
         run: target/release/mtzd-vector --write-icons "$RUNNER_TEMP/icons"
       - name: Package
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           label="${GITHUB_REF_NAME//\//-}"
           [ "$GITHUB_REF_TYPE" = tag ] || label="${GITHUB_SHA::7}"
