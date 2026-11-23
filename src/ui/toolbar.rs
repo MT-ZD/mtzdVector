@@ -83,7 +83,26 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 if ui.add(b).clicked() {
                     app.ui.open_palette();
                 }
+                ui.add_space(2.0);
+                agents_button(app, ui);
             });
         });
     });
+}
+
+/// AI agents: opens the Agents dialog; a green dot while one is connected.
+fn agents_button(app: &mut App, ui: &mut egui::Ui) {
+    #[cfg(unix)]
+    let connected = crate::mcp::live::clients();
+    #[cfg(not(unix))]
+    let connected: Vec<String> = Vec::new();
+    let r = widgets::icon_button_sized(ui, egui_phosphor::regular::ROBOT, true, app.ui.agents.is_open, vec2(28.0, 26.0), 17.0);
+    if !connected.is_empty() {
+        let c = r.rect.right_top() + vec2(-6.0, 6.0);
+        ui.painter().circle_filled(c, 3.5, theme::SUCCESS);
+    }
+    let tip = if connected.is_empty() { "AI Agents: connect Claude Code, Cursor and others".to_string() } else { format!("AI Agents: {} connected", connected.join(", ")) };
+    if widgets::tip(r, &tip, None).clicked() {
+        app.ui.agents.open();
+    }
 }

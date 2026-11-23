@@ -179,13 +179,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     ui.separator();
                     cmd_item(ui, app, Cmd::ToggleOutline);
                     ui.separator();
-                    cmd_items(ui, app, &[Cmd::ToggleRulers, Cmd::ToggleGuides, Cmd::ToggleGrid, Cmd::ToggleSnap, Cmd::ClearGuides]);
+                    cmd_items(ui, app, &[Cmd::ToggleRulers, Cmd::ToggleTimeline, Cmd::PlayPause, Cmd::ToggleGuides, Cmd::ToggleGrid, Cmd::ToggleSnap, Cmd::ClearGuides]);
                     ui.separator();
                     cmd_item(ui, app, Cmd::ToggleStudio);
                 });
                 ui.menu_button("Help", |ui| {
                     ui.set_min_width(240.0);
-                    cmd_items(ui, app, &[Cmd::Palette, Cmd::Shortcuts]);
+                    cmd_items(ui, app, &[Cmd::Palette, Cmd::Shortcuts, Cmd::Agents]);
                     ui.separator();
                     cmd_item(ui, app, Cmd::About);
                 });

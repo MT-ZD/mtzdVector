@@ -123,6 +123,8 @@ pub enum Cmd {
     Zoom100,
     ZoomSelection,
     ToggleRulers,
+    ToggleTimeline,
+    PlayPause,
     ToggleStudio,
     ToggleSnap,
     ToggleGuides,
@@ -132,6 +134,7 @@ pub enum Cmd {
     // Help
     Palette,
     Shortcuts,
+    Agents,
     About,
     // Tools
     Tool(Tool),
@@ -237,7 +240,7 @@ impl Cmd {
             ToggleLocked, Rename, ArtboardSettings, NewArtboard, DuplicateArtboard, DeleteArtboard, NextArtboard, PrevArtboard, ZoomArtboard, Group, Ungroup, CreateComponent, DetachInstance, ResetInstance, GoToMain, BringToFront, BringForward, SendBackward, SendToBack, AlignLeft, AlignHCenter,
             AlignRight, AlignTop, AlignVCenter, AlignBottom, DistributeH, DistributeV, Union, Subtract, Intersect, Exclude, Flatten, MakeClip, ReleaseClip, AddAutoLayout, RemoveAutoLayout, MakeMask, MakeAlphaMask, ReleaseMask, BlendShapes, EnvelopeWarp, ExpandLive, ReleaseLive, TraceImage, NodesSmooth,
             NodesSharp, DeleteNodes, ToggleClosed, BreakAtNode, JoinNodes, ReversePath, SimplifyPath, OffsetPath, TextAlignLeft, TextAlignCenter, TextAlignRight, ShowTypography, ConvertTextType, TextOnPath, ReleaseTextPath, LinkTextFrames, UnlinkTextFrames, ZoomIn,
-            ZoomOut, ZoomFit, Zoom100, ZoomSelection, ToggleRulers, ToggleStudio, ToggleSnap, ToggleGuides, ToggleOutline, ToggleGrid, ClearGuides, Palette, Shortcuts, About,
+            ZoomOut, ZoomFit, Zoom100, ZoomSelection, ToggleRulers, ToggleTimeline, PlayPause, ToggleStudio, ToggleSnap, ToggleGuides, ToggleOutline, ToggleGrid, ClearGuides, Palette, Shortcuts, Agents, About,
         ];
         v.extend(Cmd::TOOLS);
         v.extend((0..10).map(Cmd::Opacity));
@@ -338,6 +341,8 @@ impl Cmd {
             Zoom100 => "actual pixels, 1:1, real size",
             ZoomSelection => "focus, frame selection",
             ToggleRulers => "measure, ruler",
+            ToggleTimeline => "animation, keyframes, motion, video",
+            PlayPause => "play, pause, preview, animation, timeline",
             ToggleStudio => "panels, sidebar, inspector, hide ui",
             ToggleSnap => "magnet, align, snap",
             ToggleGuides => "helper lines",
@@ -346,6 +351,7 @@ impl Cmd {
             ClearGuides => "remove guides",
             Palette => "command palette, search",
             Shortcuts => "hotkeys, keybindings, keys",
+            Agents => "ai, mcp, claude, cursor, codex, gemini, assistant, automation, llm, copilot",
             About => "version, info, credits",
             Tool(t) => {
                 use crate::app::Tool as T;
@@ -494,6 +500,10 @@ impl Cmd {
             Zoom100 => m("Actual Size (100%)", icon::NUMBER_SQUARE_ONE, &[ks!(CMD, Num1)], C::View, NoTextField),
             ZoomSelection => m("Zoom to Selection", icon::FRAME_CORNERS, &[ks!(CMD, Num2)], C::View, NoTextField),
             ToggleRulers => m("Rulers", icon::RULER, &[ks!(CMD_SHIFT, R)], C::View, NoTextField),
+            ToggleTimeline => m("Timeline", icon::FILM_STRIP, &[], C::View, NoTextField),
+            // Anywhere (Space alone does it over the timeline; on the canvas
+            // it pans).
+            PlayPause => m("Play / Pause", icon::PLAY, &[ks!(SHIFT, Space)], C::View, Canvas),
             ToggleStudio => m("Studio Panels", icon::SIDEBAR_SIMPLE, &[ks!(CMD, Backslash)], C::View, NoTextField),
             ToggleSnap => m("Snapping", icon::MAGNET, &[ks!(CMD_SHIFT, Semicolon)], C::View, NoTextField),
             ToggleGuides => m("Guides", icon::CROSSHAIR_SIMPLE, &[ks!(CMD, Semicolon)], C::View, NoTextField),
@@ -503,6 +513,7 @@ impl Cmd {
 
             Palette => m("Quick Actions…", icon::LIGHTNING, &[ks!(CMD, K)], C::Help, Global),
             Shortcuts => m("Keyboard Shortcuts", icon::KEYBOARD, &[ks!(CMD, Slash)], C::Help, Global),
+            Agents => m("AI Agents…", icon::ROBOT, &[], C::Help, Global),
             About => m("About mtzdVector", icon::INFO, &[], C::Help, Global),
 
             Opacity(n) => {
@@ -560,6 +571,7 @@ impl Cmd {
             Undo => app.history.can_undo(),
             NextTab | PrevTab => app.tab_count() > 1,
             ClearGuides => !app.doc.guides.is_empty(),
+            PlayPause => app.doc.animation.is_some(),
             Redo => app.history.can_redo(),
             Cut | Copy | CopySvg | CopyStyle | Duplicate | ConvertToCurves | FlipH | FlipV | ToggleHidden | ToggleLocked
             | BringToFront | BringForward | SendBackward | SendToBack | AlignLeft | AlignHCenter | AlignRight | AlignTop | AlignVCenter
@@ -608,6 +620,7 @@ impl Cmd {
     pub fn checked(self, app: &App) -> Option<bool> {
         match self {
             Cmd::ToggleRulers => Some(app.ui.show_rulers),
+            Cmd::ToggleTimeline => Some(app.settings.show_timeline),
             Cmd::ToggleStudio => Some(app.ui.show_studio),
             Cmd::ToggleSnap => Some(app.snap),
             Cmd::ToggleGuides => Some(app.ui.show_guides),
@@ -784,6 +797,12 @@ impl Cmd {
             }
             ZoomSelection => app.zoom_to_selection(),
             ToggleRulers => app.ui.show_rulers = !app.ui.show_rulers,
+            ToggleTimeline => app.settings.show_timeline = !app.settings.show_timeline,
+            PlayPause => {
+                if app.doc.animation.is_some() {
+                    app.anim_toggle_play();
+                }
+            }
             ToggleStudio => app.ui.show_studio = !app.ui.show_studio,
             ToggleSnap => app.snap = !app.snap,
             ToggleGuides => app.ui.show_guides = !app.ui.show_guides,
@@ -796,6 +815,7 @@ impl Cmd {
             }
             Palette => app.ui.open_palette(),
             Shortcuts => app.ui.shortcuts_open = true,
+            Agents => app.ui.agents.open(),
             About => app.ui.about_open = true,
             Tool(t) => app.set_tool(t),
             Opacity(k) => app.set_opacity(if k == 0 { 1.0 } else { k as f32 / 10.0 }),
@@ -827,6 +847,7 @@ pub fn format_shortcut(k: &KeyboardShortcut) -> String {
         Key::Delete => "Del",
         Key::Backspace => "Backspace",
         Key::Enter => "Enter",
+        Key::Space => "Space",
         k => return format!("{s}{}", k.symbol_or_name()),
     };
     s.push_str(key);

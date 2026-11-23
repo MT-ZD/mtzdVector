@@ -51,6 +51,8 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.x = 14.0;
             let mono = |s: String| RichText::new(s).size(theme::FONT_SM).color(TEXT_DIM);
             unit_menu(app, ui);
+            #[cfg(unix)]
+            agent_chip(app, ui);
             ui.label(mono(format!("{} selected · {} objects", app.selection.len(), app.doc.shapes().len())));
             let f = crate::units::fmt_value;
             if let Some(b) = app.selection_bounds() {
@@ -63,6 +65,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             };
             if app.fonts.downloads_in_flight > 0 {
                 ui.spinner();
+            }
+            if let Some((_, p)) = app.anim.hover_last.first() {
+                ui.label(RichText::new(format!("K  key {}", p.label().to_lowercase())).size(theme::FONT_SM).color(theme::ACCENT));
+            }
+            if let Some(job) = &app.export_job {
+                let (d, t) = job.progress();
+                ui.add(egui::ProgressBar::new(d as f32 / t as f32).desired_width(90.0).desired_height(8.0));
+                ui.label(RichText::new(format!("Exporting frame {d} / {t}")).size(theme::FONT_SM).color(TEXT_DIM));
             }
             let msg = app
                 .toast
@@ -120,4 +130,26 @@ pub fn unit_menu(app: &mut App, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// While an agent is connected: who, and what it is doing (click: Agents dialog).
+#[cfg(unix)]
+fn agent_chip(app: &mut App, ui: &mut Ui) {
+    let clients = crate::mcp::live::clients();
+    if clients.is_empty() {
+        return;
+    }
+    let recent = app.mcp.activity.front().filter(|a| a.at.elapsed().as_secs_f32() < 2.5).map(|a| a.tool.clone());
+    let text = match &recent {
+        Some(t) => format!("{}  {} · {t}", egui_phosphor::regular::ROBOT, clients[0]),
+        None => format!("{}  {}", egui_phosphor::regular::ROBOT, clients.join(", ")),
+    };
+    let color = if recent.is_some() { ACCENT } else { theme::SUCCESS };
+    let r = ui.add(egui::Button::new(RichText::new(text).size(theme::FONT_SM).color(color)).frame(false));
+    if recent.is_some() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+    }
+    if super::widgets::tip(r, "An AI agent is using this window. Click for details", None).clicked() {
+        app.ui.agents.open();
+    }
 }

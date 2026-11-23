@@ -138,6 +138,25 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
+    /// Every mode, in the order Lottie numbers them (`bm`).
+    pub const ALL: [BlendMode; 16] = [
+        BlendMode::Normal,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::Darken,
+        BlendMode::Lighten,
+        BlendMode::ColorDodge,
+        BlendMode::ColorBurn,
+        BlendMode::HardLight,
+        BlendMode::SoftLight,
+        BlendMode::Difference,
+        BlendMode::Exclusion,
+        BlendMode::Hue,
+        BlendMode::Saturation,
+        BlendMode::Color,
+        BlendMode::Luminosity,
+    ];
 
     pub fn is_normal(&self) -> bool {
         *self == BlendMode::Normal
@@ -1745,6 +1764,9 @@ pub struct Shape {
     /// result (see `paint_ops::LiveEffect`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live: Option<crate::paint_ops::LiveEffect>,
+    /// Keyframes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anim: Option<Box<crate::animation::Anim>>,
 }
 
 /// One export of a layer or artboard ("@2x PNG").
@@ -1968,6 +1990,7 @@ impl Shape {
             constraints: None,
             exports: Vec::new(),
             live: None,
+            anim: None,
         }
     }
 
@@ -2198,6 +2221,9 @@ pub struct Document {
     /// File format version (see `io::native`); 0 = legacy JSON.
     #[serde(default)]
     pub format_version: u32,
+    /// Name of a document never saved (its tab), e.g. given by an agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Pages, in creation order (at least one).
     #[serde(default)]
     pub artboards: Vec<Artboard>,
@@ -2229,6 +2255,9 @@ pub struct Document {
     /// Named paragraph and character styles.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_styles: Vec<TextStyle>,
+    /// Length, frame rate and playhead, once anything is animated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<crate::animation::Timeline>,
     next_id: u64,
     #[serde(skip)]
     next_rev: u64,
@@ -2270,6 +2299,7 @@ impl Default for Document {
     fn default() -> Self {
         Document {
             format_version: crate::io::native::FORMAT_VERSION,
+            title: None,
             artboards: vec![Artboard { id: 1, name: "Artboard 1".into(), x: 0.0, y: 0.0, w: 1920.0, h: 1080.0, background: Rgba::WHITE, clip: false, exports: Vec::new() }],
             legacy_width: None,
             legacy_height: None,
@@ -2282,6 +2312,7 @@ impl Default for Document {
             grid: 10.0,
             colors: Vec::new(),
             text_styles: Vec::new(),
+            animation: None,
             next_id: 2,
             next_rev: 1,
             index: IdIndex::default(),
@@ -2669,6 +2700,10 @@ impl Document {
         }
         ids_of(taken, &mut seen);
         seen.insert(s.id);
+        // Ids kept from inside `s` must never be handed out again.
+        let mut inside = std::collections::HashSet::new();
+        ids_of(std::slice::from_ref(s), &mut inside);
+        self.next_id = self.next_id.max(inside.iter().copied().max().unwrap_or(0));
         let mut remap = std::collections::HashMap::new();
         fn walk(doc: &mut Document, s: &mut Shape, seen: &mut std::collections::HashSet<u64>, remap: &mut std::collections::HashMap<u64, u64>) {
             if let Some(children) = s.kind.children_mut() {
@@ -2807,7 +2842,7 @@ impl Document {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { shapes: self.shapes.clone(), guides: self.guides.clone(), artboards: self.artboards.clone(), colors: self.colors.clone(), text_styles: self.text_styles.clone() }
+        Snapshot { shapes: self.shapes.clone(), guides: self.guides.clone(), artboards: self.artboards.clone(), colors: self.colors.clone(), text_styles: self.text_styles.clone(), animation: self.animation.clone() }
     }
 
     pub fn restore(&mut self, s: Snapshot) {
@@ -2817,6 +2852,7 @@ impl Document {
         self.artboards = s.artboards;
         self.colors = s.colors;
         self.text_styles = s.text_styles;
+        self.animation = s.animation;
     }
 
     // Colour keys ---------------------------------------------------------
@@ -2950,6 +2986,8 @@ pub struct Snapshot {
     pub artboards: Vec<Artboard>,
     pub colors: Vec<ColorKey>,
     pub text_styles: Vec<TextStyle>,
+    /// With the shapes: they show the document at its playhead.
+    pub animation: Option<crate::animation::Timeline>,
 }
 
 #[derive(Default)]

@@ -378,6 +378,20 @@ fn layer_id(name: &str) -> String {
     })
 }
 
+thread_local! {
+    /// Wrap each top-level item's markup in `<g class="m{index}">`, for
+    /// animated SVG to target.
+    static TAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `export_svg`, each export item `i` wrapped in `<g class="m{i}">`.
+pub fn export_svg_tagged(doc: &Document, fonts: &mut FontManager, opts: &SvgOptions) -> String {
+    TAG.with(|t| t.set(true));
+    let out = export_svg(doc, fonts, opts);
+    TAG.with(|t| t.set(false));
+    out
+}
+
 /// SVG of the first artboard with `opts`.
 pub fn export_svg(doc: &Document, fonts: &mut FontManager, opts: &SvgOptions) -> String {
     let prev = crate::io::PRECISION.with(|p| p.replace(opts.precision.clamp(0, 8)));
@@ -523,6 +537,21 @@ fn wrap_blend_mask(doc: &Document, i: usize, item: &Item, start: usize, body: &m
 
 /// Defs and body markup of export items.
 fn items_markup(doc: &Document, items: &[Item]) -> (String, String) {
+    // Only the top level is tagged (not mask contents).
+    let tag = TAG.with(|t| t.replace(false));
+    let (defs, body) = items_markup_inner(doc, items, tag);
+    TAG.with(|t| t.set(tag));
+    (defs, body)
+}
+
+fn tag_item(tag: bool, i: usize, start: usize, body: &mut String) {
+    if tag {
+        let inner = body.split_off(start);
+        body.push_str(&format!("  <g class=\"m{i}\">\n{inner}  </g>\n"));
+    }
+}
+
+fn items_markup_inner(doc: &Document, items: &[Item], tag: bool) -> (String, String) {
     let mut defs = String::new();
     let mut body = String::new();
     let b64 = base64::engine::general_purpose::STANDARD;
@@ -642,6 +671,7 @@ fn items_markup(doc: &Document, items: &[Item]) -> (String, String) {
                     body.push_str("  </g>\n");
                     wrap_effects(i, item, fx_bounds, start, &mut body, &mut defs);
                     wrap_blend_mask(doc, i, item, start, &mut body, &mut defs);
+                    tag_item(tag, i, start, &mut body);
                     continue;
                 }
                 match stroke_svg(s, &item.path, &d, "    ") {
@@ -661,6 +691,7 @@ fn items_markup(doc: &Document, items: &[Item]) -> (String, String) {
         }
         wrap_effects(i, item, fx_bounds, start, &mut body, &mut defs);
         wrap_blend_mask(doc, i, item, start, &mut body, &mut defs);
+        tag_item(tag, i, start, &mut body);
     }
     while let Some((g, start)) = open.pop() {
         close_group(g, &items[g], start, &mut body, &mut defs);
@@ -819,6 +850,30 @@ fn walk(group: &usvg::Group, opacity: f32, doc: &mut Document) {
                         }
                     }
                 }
+                // Authored groups (with an id) stay groups, named after it.
+                if !g.id().is_empty() {
+                    let ids: Vec<u64> = doc.shapes()[before.min(doc.shapes().len())..].iter().map(|s| s.id).collect();
+                    match ids.len() {
+                        0 => {}
+                        1 => {
+                            if let Some(s) = doc.get_mut(ids[0])
+                                && (s.kind.children().is_some() || s.name.is_empty() || s.name == Shape::new(ShapeKind::Group { children: vec![] }).name || s.name == "Path")
+                            {
+                                s.name = g.id().to_string();
+                            }
+                        }
+                        _ => {
+                            let children: Vec<Shape> = ids.iter().filter_map(|id| doc.get(*id).cloned()).collect();
+                            for id in &ids {
+                                doc.remove(*id);
+                            }
+                            let mut grp = Shape::new(ShapeKind::Group { children });
+                            grp.fill = None;
+                            grp.name = g.id().to_string();
+                            doc.add_shape(grp);
+                        }
+                    }
+                }
             }
             usvg::Node::Path(p) => {
                 if !p.is_visible() {
@@ -860,7 +915,31 @@ fn walk(group: &usvg::Group, opacity: f32, doc: &mut Document) {
                     },
                     ..Default::default()
                 }});
-                doc.add_shape(shape);
+                // Strokes are solid colours: a gradient stroke becomes its
+                // outline, filled with the gradient, over the shape.
+                let gradient_stroke = p.stroke().filter(|st| !matches!(st.paint(), usvg::Paint::Color(_))).and_then(|st| {
+                    let stroke = shape.stroke.clone()?;
+                    let area = crate::strokes::stroke_area(&path, &stroke, shape.fill_rule);
+                    let outline = geom::polys_to_pathdata_smooth(&area);
+                    let paint = gradient_of(st.paint(), st.opacity().get(), t, &geom::pathdata_to_bez(&outline))?;
+                    let mut out = Shape::new(ShapeKind::Path(outline));
+                    out.fill = Some(paint);
+                    out.fill_rule = FillRule::EvenOdd;
+                    out.opacity = opacity;
+                    out.name = if p.id().is_empty() { "Stroke".into() } else { format!("{} (stroke)", p.id()) };
+                    Some(out)
+                });
+                if let Some(mut out) = gradient_stroke {
+                    shape.stroke = None;
+                    if shape.fill.is_some() {
+                        doc.add_shape(shape);
+                    } else if !p.id().is_empty() {
+                        out.name = p.id().to_string();
+                    }
+                    doc.add_shape(out);
+                } else {
+                    doc.add_shape(shape);
+                }
             }
             usvg::Node::Image(img) => {
                 if !img.is_visible() {
@@ -890,7 +969,155 @@ fn walk(group: &usvg::Group, opacity: f32, doc: &mut Document) {
                     }
                 }
             }
-            usvg::Node::Text(t) => walk(t.flattened(), opacity, doc),
+            usvg::Node::Text(t) => match text_shape(t, opacity) {
+                Some(s) => {
+                    doc.add_shape(s);
+                }
+                None => {
+                    // Outlines, grouped and named so they read as text.
+                    let before = doc.shapes().len();
+                    walk(t.flattened(), opacity, doc);
+                    let ids: Vec<u64> = doc.shapes()[before..].iter().map(|s| s.id).collect();
+                    let name = if t.id().is_empty() { "Outlined text".to_string() } else { format!("{} (outlined text)", t.id()) };
+                    match ids.as_slice() {
+                        [] => {}
+                        [one] => {
+                            if let Some(s) = doc.get_mut(*one) {
+                                s.name = name;
+                            }
+                        }
+                        _ => {
+                            let children: Vec<Shape> = ids.iter().filter_map(|id| doc.get(*id).cloned()).collect();
+                            for id in &ids {
+                                doc.remove(*id);
+                            }
+                            let mut grp = Shape::new(ShapeKind::Group { children });
+                            grp.fill = None;
+                            grp.name = name;
+                            doc.add_shape(grp);
+                        }
+                    }
+                }
+            },
+        }
+    }
+}
+
+/// `<text>` as an editable text shape when it is plain horizontal text in
+/// one style, on one line or on lines of the same x and even spacing (else
+/// None: outlines). Its origin is the first baseline at the anchor;
+/// `place_texts` turns that into the top-left once fonts can lay it out.
+fn text_shape(t: &usvg::Text, opacity: f32) -> Option<Shape> {
+    use crate::document::{TextAlign, TextData};
+    if t.dx().iter().chain(t.dy()).chain(t.rotate()).any(|v| *v != 0.0) || t.writing_mode() != usvg::WritingMode::LeftToRight {
+        return None;
+    }
+    let chunks = t.chunks();
+    let first = chunks.first()?;
+    let span = first.spans().first()?;
+    let style = |s: &usvg::TextSpan| {
+        (s.font().clone(), s.font_size().get().to_bits(), s.letter_spacing().to_bits(), format!("{:?}", s.fill()), format!("{:?}", s.stroke()), s.is_visible())
+    };
+    let key = style(span);
+    let mut content = String::new();
+    let mut spacing = None;
+    let (x0, y0) = (first.x().unwrap_or(0.0), first.y().unwrap_or(0.0));
+    let mut last_y = y0;
+    for (i, c) in chunks.iter().enumerate() {
+        if !matches!(c.text_flow(), usvg::TextFlow::Linear) || c.anchor() != first.anchor() || c.spans().iter().any(|s| style(s) != key) {
+            return None;
+        }
+        if i > 0 {
+            let (x, y) = (c.x().unwrap_or(x0), c.y().unwrap_or(last_y));
+            let dy = y - last_y;
+            if (x - x0).abs() > 0.01 || dy <= 0.0 || spacing.is_some_and(|s: f32| (s - dy).abs() > 0.5) {
+                return None;
+            }
+            spacing = Some(dy);
+            last_y = y;
+            content.push('\n');
+        }
+        content.push_str(c.text());
+    }
+    if !span.is_visible() || content.trim().is_empty() {
+        return None;
+    }
+    let size = span.font_size().get() as f64;
+    let families: Vec<String> = span.font().families().iter().map(|f| f.to_string()).collect();
+    let family = match families.iter().find(|f| f.starts_with('"')) {
+        Some(f) => f.trim_matches('"').to_string(),
+        None => match families.first().map(String::as_str) {
+            Some("serif") => "Noto Serif".into(),
+            Some("monospace") => "Noto Sans Mono".into(),
+            _ => TextData::default().family,
+        },
+    };
+    let td = TextData {
+        content,
+        family,
+        weight: span.font().weight(),
+        italic: span.font().style() != usvg::FontStyle::Normal,
+        size,
+        line_height: spacing.map(|s| s as f64 / size).unwrap_or(1.2),
+        letter_spacing: span.letter_spacing() as f64,
+        align: match first.anchor() {
+            usvg::TextAnchor::Middle => TextAlign::Center,
+            usvg::TextAnchor::End => TextAlign::Right,
+            usvg::TextAnchor::Start => TextAlign::Left,
+        },
+        underline: span.decoration().underline().is_some(),
+        strike: span.decoration().line_through().is_some(),
+        ..Default::default()
+    };
+    let at = affine_of(t.abs_transform());
+    let mut s = Shape::new(ShapeKind::Text(td));
+    s.transform = at * Affine::translate((x0 as f64, y0 as f64));
+    if !t.id().is_empty() {
+        s.name = t.id().to_string();
+    }
+    s.opacity = opacity;
+    // Gradients in document coordinates for now (a unit box): `place_texts`
+    // maps them onto the laid-out letters.
+    let unit = kurbo::Shape::to_path(&kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), 0.1);
+    s.fill = span.fill().map(|f| gradient_of(f.paint(), f.opacity().get(), Affine::IDENTITY, &unit).unwrap_or_else(|| Paint::Solid(color_of(f.paint(), f.opacity().get()))));
+    let scale = at.determinant().abs().sqrt();
+    s.stroke = span.stroke().map(|st| Stroke {
+        color: color_of(st.paint(), st.opacity().get()),
+        width: st.width().get() as f64 * scale,
+        join: match st.linejoin() {
+            usvg::LineJoin::Round => LineJoin::Round,
+            usvg::LineJoin::Bevel => LineJoin::Bevel,
+            _ => LineJoin::Miter,
+        },
+        ..Default::default()
+    });
+    Some(s)
+}
+
+/// Move imported texts from their baseline anchor to their top-left.
+fn place_texts(doc: &mut Document, fonts: &mut FontManager) {
+    use crate::document::TextAlign;
+    for id in doc.all_ids() {
+        let Some(ShapeKind::Text(td)) = doc.get(id).map(|s| &s.kind) else { continue };
+        let l = fonts.layout(td);
+        let baseline = l.lines.first().map(|l| l.baseline).unwrap_or(td.size * 0.8);
+        let w = l.lines.iter().map(|l| l.x1).fold(0.0, f64::max);
+        let dx = match td.align {
+            TextAlign::Center => -w / 2.0,
+            TextAlign::Right => -w,
+            _ => 0.0,
+        };
+        let glyphs = geom::path_bounds(&l.path);
+        if let Some(s) = doc.get_mut(id) {
+            s.transform *= Affine::translate((dx, -baseline));
+            // Gradient ends: document → the letters' local box units.
+            if let (Some(Paint::Gradient(g)), Some(b)) = (&mut s.fill, glyphs) {
+                let m = Affine::new([b.width().max(1e-9), 0.0, 0.0, b.height().max(1e-9), b.x0, b.y0]).inverse() * s.transform.inverse();
+                for p in [&mut g.start, &mut g.end] {
+                    let q = m * Point::new(p[0], p[1]);
+                    *p = [q.x, q.y];
+                }
+            }
         }
     }
 }
@@ -901,6 +1128,7 @@ pub fn import(data: &[u8], fonts: &mut FontManager) -> Result<Document, String> 
     let mut doc = Document::default();
     doc.set_size(tree.size().width() as f64, tree.size().height() as f64);
     walk(tree.root(), 1.0, &mut doc);
+    place_texts(&mut doc, fonts);
     Ok(doc)
 }
 

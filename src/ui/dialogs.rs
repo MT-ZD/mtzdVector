@@ -262,6 +262,7 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
         return;
     }
     let mut action = None;
+    let mut open_agents = false;
     let r = modal("prefs_dialog").show(ctx, |ui| {
         ui.set_width(400.0);
         modal_title(ui, icon::GEAR_SIX, "Preferences");
@@ -294,6 +295,20 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
         widgets::prop_row(ui, "Tablet", |ui| {
             widgets::tip_long(ui.checkbox(&mut s.tablet, "Pen pressure"), "Pen pressure", None, "Read drawing tablets directly for pen pressure (Wayland). Turn off if your pen misbehaves; it then works as a mouse. Applies after a restart");
         });
+        widgets::prop_row(ui, "Animation", |ui| {
+            widgets::tip(ui.checkbox(&mut s.show_timeline, "Show the timeline"), "A timeline under the canvas for keyframe animation; export it as WebM video, animated SVG or Lottie", None);
+        });
+        widgets::prop_row(ui, "Agents", |ui| {
+            widgets::tip_long(
+                ui.checkbox(&mut s.agent_control, "Let AI agents use this window"),
+                "AI agents",
+                None,
+                "Agents connected through MCP (mtzd-vector --mcp) edit the open document live: you see every change and can undo it. When off, they get a hidden instance instead",
+            );
+            if ui.button(format!("{}  Set up…", icon::ROBOT)).clicked() {
+                open_agents = true;
+            }
+        });
         widgets::prop_row(ui, "Units", |ui| {
             let unit = s.default_unit;
             widgets::dropdown(ui, "pref_unit", format!("{}  {}", icon::RULER, unit.label()), 140.0, |ui| {
@@ -317,7 +332,7 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
             // Workspace back to defaults; preferences stay.
             let d = crate::settings::Settings::default();
             let keep = app.settings.clone();
-            let s = crate::settings::Settings { ui_scale: keep.ui_scale, nudge: keep.nudge, nudge_big: keep.nudge_big, autosave_secs: keep.autosave_secs, default_unit: keep.default_unit, keep_backup: keep.keep_backup, ..d };
+            let s = crate::settings::Settings { ui_scale: keep.ui_scale, nudge: keep.nudge, nudge_big: keep.nudge_big, autosave_secs: keep.autosave_secs, default_unit: keep.default_unit, keep_backup: keep.keep_backup, show_timeline: keep.show_timeline, agent_control: keep.agent_control, ..d };
             app.apply_settings(s, ctx);
             // The studio dock remembers its width in egui's panel state.
             ctx.data_mut(|d| d.remove::<egui::containers::panel::PanelState>(egui::Id::new("studio")));
@@ -325,5 +340,9 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
         }
         Some(_) => app.ui.prefs.open = false,
         None => {}
+    }
+    if open_agents {
+        app.ui.prefs.open = false;
+        app.ui.agents.open();
     }
 }

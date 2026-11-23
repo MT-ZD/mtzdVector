@@ -7,6 +7,7 @@ use egui::{Color32, CornerRadius, RichText, Sense, Stroke, StrokeKind, Ui, vec2}
 use egui_phosphor::regular as icon;
 
 use super::{appearance, color, layout_ui, shape_icon, stroke, transform, typography};
+use crate::animation::Prop;
 use crate::app::{App, BuilderMode, Tool};
 use crate::commands::Cmd;
 use crate::document::ShapeKind;
@@ -26,18 +27,89 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     object_header(app, ui);
     component_section(app, ui);
     tool_section(app, ui);
-    transform::transform_section(app, ui);
+    keyable(app, ui, &[Prop::Transform], transform::transform_section);
     layout_ui::auto_layout_section(app, ui);
     live_section(app, ui);
     layout_ui::constraints_section(app, ui);
     boolean_section(app, ui);
-    appearance::shape_section(app, ui);
+    keyable(app, ui, &[Prop::Shape], appearance::shape_section);
+    // K anywhere else in the text section keys the characters.
+    let top = ui.cursor().min.y;
     typography::text_section(app, ui);
-    appearance::layer_section(app, ui);
-    color::fill_section(app, ui);
-    stroke::stroke_section(app, ui);
+    let r = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().min.y);
+    app.anim_hover(ui, r, None, &[Prop::Text]);
+    keyable(app, ui, &[Prop::Opacity], appearance::layer_section);
+    keyable(app, ui, &[Prop::Fill], color::fill_section);
+    keyable(app, ui, &[Prop::StrokeWidth], stroke::stroke_section);
     appearance::effects_section(app, ui);
     layout_ui::export_section(app, ui);
+}
+
+/// A section whose properties K keys while the pointer is over it. Its
+/// inputs are tinted: yellow with a key at the playhead, orange on an
+/// interpolated frame between keys.
+fn keyable(app: &mut App, ui: &mut Ui, props: &[Prop], section: fn(&mut App, &mut Ui)) {
+    let top = ui.cursor().min.y;
+    let tint = key_tint(app, props[0]);
+    ui.scope(|ui| {
+        set_input_tint(ui, tint);
+        section(app, ui);
+    });
+    let r = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().min.y);
+    app.anim_hover(ui, r, None, props);
+}
+
+/// Rows for one property inside a section: K over them keys `p` (not the
+/// section's), and their inputs are tinted for `p`.
+pub fn key_rows<R>(app: &mut App, ui: &mut Ui, p: Prop, add: impl FnOnce(&mut App, &mut Ui) -> R) -> R {
+    let top = ui.cursor().min.y;
+    let tint = key_tint(app, p);
+    let out = ui
+        .scope(|ui| {
+            set_input_tint(ui, tint);
+            tint_buttons(ui, tint);
+            add(app, ui)
+        })
+        .inner;
+    let r = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().min.y);
+    app.anim_hover(ui, r, None, &[p]);
+    out
+}
+
+/// One input for `p` among others in a row: tinted for `p`, K over it keys `p`.
+pub fn key_field<R>(app: &mut App, ui: &mut Ui, p: Prop, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let tint = key_tint(app, p);
+    let r = ui.scope(|ui| {
+        set_input_tint(ui, tint);
+        tint_buttons(ui, tint);
+        add(ui)
+    });
+    app.anim_hover(ui, r.response.rect, None, &[p]);
+    r.inner
+}
+
+/// Input background for how `p` of the selection is animated.
+pub fn key_tint(app: &App, p: Prop) -> egui::Color32 {
+    match app.anim_key_state(p) {
+        crate::animation::KeyState::Keyed => theme::KEYED,
+        crate::animation::KeyState::Animated => theme::ANIMATED,
+        crate::animation::KeyState::Static => theme::BG_INPUT,
+    }
+}
+
+/// Dropdowns and buttons of a single animated property take its tint too.
+fn tint_buttons(ui: &mut Ui, tint: egui::Color32) {
+    if tint != theme::BG_INPUT {
+        let w = &mut ui.visuals_mut().widgets;
+        w.inactive.weak_bg_fill = tint;
+        w.inactive.bg_fill = tint;
+    }
+}
+
+pub fn set_input_tint(ui: &mut Ui, tint: egui::Color32) {
+    let v = ui.visuals_mut();
+    v.extreme_bg_color = tint;
+    v.text_edit_bg_color = Some(tint);
 }
 
 /// Live warp or blend of the selected group: its settings, Expand and
@@ -79,10 +151,12 @@ fn live_section(app: &mut App, ui: &mut Ui) {
                 }
             }
             LiveEffect::Blend { steps } => {
-                let mut f = steps as f32;
-                if widgets::slider_row(ui, "Steps", &mut f, 1.0..=50.0, "") {
-                    app.set_blend_steps(id, f.round() as u32);
-                }
+                key_rows(app, ui, Prop::BlendSteps, |app, ui| {
+                    let mut f = steps as f32;
+                    if widgets::slider_row(ui, "Steps", &mut f, 0.0..=50.0, "") {
+                        app.set_blend_steps(id, f.round() as u32);
+                    }
+                });
                 ui.label(RichText::new("Edit the end shapes inside the group; the steps follow.").size(theme::FONT_SM).color(theme::TEXT_FAINT));
             }
         }
@@ -811,7 +885,10 @@ pub fn header_actions(ui: &mut Ui, has: bool, add: &mut bool, remove: &mut bool,
 pub fn paint_row(app: &mut App, ui: &mut Ui, key: &str, paint: WellPaint, label: &str, trailing: impl FnOnce(&mut Ui)) -> bool {
     let mut open = app.ui.paint_open.as_deref() == Some(key);
     let mut toggle = false;
-    ui.horizontal(|ui| {
+    // Keyframed colours get the tinted background (see `keyable`).
+    let tint = ui.visuals().extreme_bg_color;
+    let bg = ui.painter().add(egui::Shape::Noop);
+    let row = ui.horizontal(|ui| {
         ui.set_min_height(theme::ROW_H + 2.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -830,6 +907,9 @@ pub fn paint_row(app: &mut App, ui: &mut Ui, key: &str, paint: WellPaint, label:
             });
         });
     });
+    if tint != theme::BG_INPUT {
+        ui.painter().set(bg, egui::Shape::rect_filled(row.response.rect.expand2(vec2(4.0, 1.0)), theme::radius(), tint));
+    }
     if toggle {
         open = !open;
         if open {

@@ -173,6 +173,7 @@ by the names other apps use. Typing "distort" finds Envelope Warp,
     mtzd-vector --write-icons DIR                write the hicolor icon set (packaging)
     mtzd-vector --screenshot OUT.png [FILE] [--size WxH] [--scale S] [--frames N]
     mtzd-vector --script SCRIPT [FILE] [--size WxH] [--scale S]
+    mtzd-vector --mcp [--live | --headless] [FILE]   MCP server for AI agents (stdio)
 
 `--screenshot` and `--script` render the UI offscreen without opening a
 window, which is handy for tests and documentation.
@@ -192,6 +193,37 @@ format given by `-f` or the output's extension. Run
 
 It exits with 0 on success, 1 if any input failed, and 2 on a usage error.
 From the Flatpak, use `flatpak run pro.mtzd.MtzdVector --export …`.
+
+### AI agents (MCP)
+
+`--mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server,
+so agents such as Claude Code can draw and edit. **Help › AI Agents** (or the
+robot button in the toolbar) adds it to Claude Code, Claude Desktop, Cursor,
+VS Code, Windsurf, Zed, Gemini CLI, Codex CLI, opencode or LM Studio with one
+click, shows which agent is connected and what it did, and has the command and
+JSON to copy for any other agent. By hand:
+
+    claude mcp add mtzd-vector -- mtzd-vector --mcp
+
+If mtzdVector is open, the agent works in that window: you watch each change
+and can undo it (one step per tool call), and the status bar shows what it is
+doing. Otherwise it gets a hidden instance that renders offscreen. `--live` /
+`--headless` force one or the other, and the Agents dialog can turn window
+access off.
+
+Tools:
+- Look: `get_state` (documents, artboards, selection, layer tree with bounds),
+  `get_shapes` (full JSON), `render` (the artwork as PNG), `screenshot` (the window).
+- Edit: `add_svg` (any SVG markup), `add_shape`, `update_shapes` (simple fields
+  or a JSON merge patch), `delete_shapes`, `select`, `list_commands` /
+  `run_command` (every menu command), `get_document` / `patch_document`
+  (artboards, colour keys, text styles, guides, grid, timeline), `seek`.
+- The whole interface: `ui_tree` lists every widget on screen (menus, panels,
+  dialogs, fields, tabs) by role and name; `ui_click` and `ui_type` operate
+  them by name or id; `input` sends raw pointer and key events; `set_tool`,
+  `set_view`.
+- App: `get_settings` / `patch_settings`, `list_fonts`, `open_file`,
+  `new_document`, `place_file`, `save`, `export`, `switch_tab`.
 
 None of the headless modes (`--export`, `--screenshot`, `--script`) write
 settings, recent files or autosaves.

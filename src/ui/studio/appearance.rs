@@ -5,6 +5,7 @@ use egui::{RichText, Ui};
 use egui_phosphor::regular as icon;
 
 use super::edit_selection;
+use crate::animation::Prop;
 use crate::app::App;
 use crate::document::{FillRule, Shadow, Shape, ShapeKind};
 use crate::ui::theme::{self, TEXT_DIM};
@@ -18,7 +19,7 @@ pub fn layer_section(app: &mut App, ui: &mut Ui) {
             if widgets::slider_row(ui, &format!("{}  Opacity", icon::DROP_HALF), &mut o, 0.0..=100.0, "%") {
                 p.opacity = o / 100.0;
             }
-            widgets::prop_row(ui, &format!("{}  Blend", icon::CIRCLE_HALF), |ui| {
+            super::design::key_rows(app, ui, Prop::Blend, |_, ui| widgets::prop_row(ui, &format!("{}  Blend", icon::CIRCLE_HALF), |ui| {
                 use crate::document::BlendMode as B;
                 let cur = p.blend;
                 // Grouped as in other editors: darken, lighten, contrast, inversion, component.
@@ -42,7 +43,7 @@ pub fn layer_section(app: &mut App, ui: &mut Ui) {
                         }
                     }
                 });
-            });
+            }));
             if matches!(p.kind, ShapeKind::Path(_)) {
                 widgets::prop_row(ui, &format!("{}  Fill rule", icon::SELECTION_INVERSE), |ui| {
                     widgets::segmented(ui, &mut p.fill_rule, &[(FillRule::NonZero, "Non-zero"), (FillRule::EvenOdd, "Even-odd")]);
@@ -209,27 +210,31 @@ fn shadow_rows(app: &mut App, ui: &mut Ui, sh: &mut Shadow, key: &str, label: &s
 fn effect_rows(app: &mut App, ui: &mut Ui, p: &mut Shape) {
     let id = p.id;
     if let Some(sh) = &mut p.shadow {
-        if shadow_rows(app, ui, sh, &format!("shadow_{id}"), "Drop shadow", "shadow_picker") {
+        if super::design::key_rows(app, ui, Prop::Shadow, |app, ui| shadow_rows(app, ui, sh, &format!("shadow_{id}"), "Drop shadow", "shadow_picker")) {
             p.shadow = None;
         }
     }
     if let Some(sh) = &mut p.inner_shadow {
-        if shadow_rows(app, ui, sh, &format!("inner_shadow_{id}"), "Inner shadow", "inner_shadow_picker") {
+        if super::design::key_rows(app, ui, Prop::InnerShadow, |app, ui| shadow_rows(app, ui, sh, &format!("inner_shadow_{id}"), "Inner shadow", "inner_shadow_picker")) {
             p.inner_shadow = None;
         }
     }
     if p.blur > 0.0 {
         let mut r = p.blur;
-        let remove = effect_title(ui, icon::DROP_HALF_BOTTOM, "Layer blur", |ui| {
-            widgets::num_field(ui, "", &mut r, Num::px().range(0.0, 1000.0).speed(0.25), 80.0);
+        let remove = super::design::key_rows(app, ui, Prop::Blur, |_, ui| {
+            effect_title(ui, icon::DROP_HALF_BOTTOM, "Layer blur", |ui| {
+                widgets::num_field(ui, "", &mut r, Num::px().range(0.0, 1000.0).speed(0.25), 80.0);
+            })
         });
         p.blur = if remove { 0.0 } else { r.max(0.01) };
         ui.add_space(4.0);
     }
     if p.noise > 0.0 {
         let mut n = p.noise as f64 * 100.0;
-        let remove = effect_title(ui, icon::DOTS_NINE, "Noise", |ui| {
-            widgets::num_field(ui, "", &mut n, Num::default().range(1.0, 100.0).suffix("%").decimals(0), 80.0);
+        let remove = super::design::key_rows(app, ui, Prop::Noise, |_, ui| {
+            effect_title(ui, icon::DOTS_NINE, "Noise", |ui| {
+                widgets::num_field(ui, "", &mut n, Num::default().range(1.0, 100.0).suffix("%").decimals(0), 80.0);
+            })
         });
         p.noise = if remove { 0.0 } else { (n / 100.0).max(0.01) as f32 };
         ui.add_space(4.0);

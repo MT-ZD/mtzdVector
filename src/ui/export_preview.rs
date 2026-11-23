@@ -246,7 +246,8 @@ pub fn show(app: &mut App, ui: &mut Ui, size: egui::Vec2) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let text = match p.size {
                 Some(Some(b)) => human_size(b),
-                _ => "…".into(),
+                Some(None) => "–".into(),
+                None => "…".into(),
             };
             widgets::tip(ui.label(RichText::new(text).size(theme::FONT_SM).color(theme::TEXT)), "Size of the exported file with these settings", None);
         });

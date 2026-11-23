@@ -4,7 +4,7 @@
 use egui::{Align2, Color32, CornerRadius, CursorIcon, Id, Pos2, Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 use egui_phosphor::regular as icon;
 
-use super::theme::{self, ACCENT, BG_ACTIVE, BG_HOVER, BG_INPUT, BORDER, TEXT, TEXT_DIM, TEXT_FAINT};
+use super::theme::{self, ACCENT, BG_ACTIVE, BG_HOVER, BORDER, TEXT, TEXT_DIM, TEXT_FAINT};
 use crate::document::Rgba;
 
 // ---------------------------------------------------------------------------
@@ -16,6 +16,7 @@ pub fn tip(resp: Response, label: &str, shortcut: Option<&str>) -> Response {
     if label.is_empty() {
         return resp;
     }
+    name_widget(&resp, label);
     resp.on_hover_ui(|ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(label).size(theme::FONT_MD).color(TEXT));
@@ -27,8 +28,44 @@ pub fn tip(resp: Response, label: &str, shortcut: Option<&str>) -> Response {
     })
 }
 
+/// Give a widget its tooltip as an accessible name when its own label is
+/// empty or only an icon (what agents and screen readers see; no-op unless
+/// the AccessKit tree is being built).
+pub fn name_widget(resp: &Response, label: &str) {
+    use egui::accesskit::Role;
+    let clickable = resp.sense.senses_click();
+    resp.ctx.accesskit_node_builder(resp.id, |n| {
+        if n.role() == Role::Unknown && clickable {
+            n.set_role(Role::Button);
+        }
+        let iconic = n.label().is_none_or(|l| l.chars().all(|c| ('\u{E000}'..='\u{F8FF}').contains(&c) || c.is_whitespace()));
+        if iconic {
+            n.set_label(label);
+        } else if n.label() != Some(label) && n.description().is_none() {
+            n.set_description(label);
+        }
+    });
+}
+
+/// Role and name for a hand-painted widget (no-op unless the AccessKit tree
+/// is being built). `expanded` marks collapsible headers.
+pub fn describe(resp: &Response, role: egui::accesskit::Role, label: &str, expanded: Option<bool>) {
+    resp.ctx.accesskit_node_builder(resp.id, |n| {
+        n.set_role(role);
+        if role == egui::accesskit::Role::Label {
+            n.set_value(label);
+        } else {
+            n.set_label(label);
+        }
+        if let Some(e) = expanded {
+            n.set_expanded(e);
+        }
+    });
+}
+
 /// Tooltip with a title, optional shortcut and a short dim description.
 pub fn tip_long(resp: Response, label: &str, shortcut: Option<&str>, body: &str) -> Response {
+    name_widget(&resp, label);
     resp.on_hover_ui(|ui| {
         ui.set_max_width(260.0);
         ui.horizontal(|ui| {
@@ -147,7 +184,7 @@ pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
 /// Single-line text input with the same height and inner padding as the
 /// number fields.
 pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> Response {
-    ui.add(
+    let r = ui.add(
         egui::TextEdit::singleline(text)
             .hint_text(hint)
             .desired_width(width)
@@ -155,7 +192,11 @@ pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> Res
             .min_size(vec2(0.0, theme::ROW_H))
             .vertical_align(egui::Align::Center)
             .font(egui::TextStyle::Body),
-    )
+    );
+    if !hint.is_empty() {
+        name_widget(&r, hint);
+    }
+    r
 }
 
 /// Thin vertical separator for toolbars.
@@ -185,6 +226,10 @@ pub fn tab_group_header(ui: &mut Ui, tabs: &[&str], active: &mut usize, collapse
         let tr = Rect::from_min_size(pos2(x, rect.top() + 3.0), vec2(tw, rect.height() - 3.0));
         let tresp = ui.interact(tr, ui.id().with(("tab", i, *t)), Sense::click());
         let sel = *active == i && !*collapsed;
+        describe(&tresp, egui::accesskit::Role::Tab, t, None);
+        if sel {
+            tresp.ctx.accesskit_node_builder(tresp.id, |n| n.set_selected(true));
+        }
         if sel {
             ui.painter().rect_filled(tr, CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, theme::BG_PANEL);
         } else if tresp.hovered() {
@@ -225,6 +270,7 @@ pub fn section_icon<R>(ui: &mut Ui, id: &str, glyph: &str, title: &str, trailing
     let mut open = ui.data_mut(|d| *d.get_temp_mut_or(id, true));
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 36.0), Sense::click());
+    describe(&resp, egui::accesskit::Role::Button, &format!("{title} section"), Some(open));
     let p = ui.painter();
     let clip = ui.clip_rect();
     p.hline(clip.left()..=clip.right(), rect.top() + 0.5, Stroke::new(1.0, theme::SEPARATOR));
@@ -298,7 +344,8 @@ pub fn reveal(ui: &Ui, key: &str, rect: egui::Rect) {
 pub fn prop_row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme::SP1;
-        let (rect, _) = ui.allocate_exact_size(vec2(64.0, theme::ROW_H), Sense::hover());
+        let (rect, r) = ui.allocate_exact_size(vec2(64.0, theme::ROW_H), Sense::hover());
+        describe(&r, egui::accesskit::Role::Label, label, None);
         ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, label, egui::FontId::proportional(theme::FONT_SM), TEXT_DIM);
         add(ui)
     })
@@ -379,8 +426,10 @@ pub fn num_field(ui: &mut Ui, label: &str, value: &mut f64, opts: Num, width: f3
         let label_w = if label.is_empty() { 0.0 } else { (label.chars().count() as f32 * 7.0 + 10.0).max(18.0) };
         let lrect = Rect::from_min_size(rect.min, vec2(label_w, rect.height()));
         let frect = Rect::from_min_max(pos2(lrect.right(), rect.top()), rect.max);
+        // The input colour comes from the style: keyframed sections tint it.
+        let bg = ui.visuals().extreme_bg_color;
         let p = ui.painter();
-        p.rect_filled(rect, theme::radius(), BG_INPUT);
+        p.rect_filled(rect, theme::radius(), bg);
 
         let mut resp = ui.interact(lrect, base.id.with("scrub"), Sense::drag());
         if !label.is_empty() {
@@ -422,6 +471,9 @@ pub fn num_field(ui: &mut Ui, label: &str, value: &mut f64, opts: Num, width: f3
             .custom_parser(move |t| crate::units::eval_expr(t, opts.length.then_some((unit, dpi))))
             .update_while_editing(false);
         let r = child.add_sized(frect.size(), dv);
+        if !label.is_empty() {
+            name_widget(&r, label);
+        }
         if r.changed() && !r.dragged() {
             *value = (shown / k).clamp(opts.min, opts.max);
         }
@@ -528,7 +580,7 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
 /// Segmented control; `seg_w` > 0 forces equal segment widths.
 pub fn segmented_sized<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str)], seg_w: f32) -> bool {
     let mut changed = false;
-    egui::Frame::new().fill(BG_INPUT).corner_radius(theme::radius()).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
+    egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(theme::radius()).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.horizontal(|ui| {
             for (v, label) in options {
@@ -553,7 +605,7 @@ pub fn segmented_sized<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options:
 /// colour)` draws each option; `options` pairs values with tooltips.
 pub fn segmented_glyphs<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str)], size: egui::Vec2, paint: impl Fn(&egui::Painter, egui::Rect, T, Color32)) -> bool {
     let mut changed = false;
-    egui::Frame::new().fill(BG_INPUT).corner_radius(theme::radius()).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
+    egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(theme::radius()).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.horizontal(|ui| {
             for (v, label) in options {
@@ -681,8 +733,9 @@ pub fn anchor_selector(ui: &mut Ui, anchor: &mut (u8, u8)) -> Response {
     let cell = 10.0;
     let size = vec2(cell * 3.0 + 8.0, cell * 3.0 + 8.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    // Not a value: never tinted as keyframed.
     let p = ui.painter();
-    p.rect_filled(rect, theme::radius(), BG_INPUT);
+    p.rect_filled(rect, theme::radius(), theme::BG_INPUT);
     let origin = rect.min + vec2(4.0 + cell / 2.0, 4.0 + cell / 2.0);
     for y in 0..3u8 {
         for x in 0..3u8 {

@@ -1,12 +1,15 @@
 //! File import / export.
 
+pub mod anim_export;
 pub mod dxf;
 pub mod eps;
 pub mod export;
+pub mod lottie;
 pub mod native;
 pub mod pdf;
 pub mod pdf_text;
 pub mod svg;
+pub use mtzd_webm as webm;
 
 use std::path::Path;
 
@@ -189,6 +192,7 @@ pub enum Format {
     Svg,
     Pdf,
     Eps,
+    Lottie,
 }
 
 pub fn format_of(path: &Path) -> Option<Format> {
@@ -198,6 +202,7 @@ pub fn format_of(path: &Path) -> Option<Format> {
         "svg" | "svgz" => Format::Svg,
         "pdf" | "ai" => Format::Pdf,
         "eps" | "ps" => Format::Eps,
+        "json" | "lottie" => Format::Lottie,
         _ => return None,
     })
 }
@@ -218,6 +223,13 @@ pub fn open(path: &Path, fonts: &mut FontManager) -> Result<Document, String> {
         Format::Pdf if is_postscript(path) => eps::import(path),
         Format::Pdf => pdf::import(path),
         Format::Eps => eps::import(path),
+        Format::Lottie => {
+            let data = std::fs::read(path).map_err(|e| e.to_string())?;
+            if !lottie::is_lottie(&data) {
+                return Err("Not a Lottie animation".into());
+            }
+            lottie::import(&data, path.parent())
+        }
     }
 }
 

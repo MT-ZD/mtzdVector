@@ -42,6 +42,10 @@ pub struct Settings {
     /// Read drawing tablets directly (Wayland tablet-v2) for pen pressure.
     /// Takes effect on the next start.
     pub tablet: bool,
+    /// Show the animation timeline under the canvas.
+    pub show_timeline: bool,
+    /// Let AI agents (`--mcp`) drive the open window.
+    pub agent_control: bool,
 }
 
 impl Default for Settings {
@@ -68,6 +72,8 @@ impl Default for Settings {
             spell_check: true,
             libraries: Vec::new(),
             tablet: true,
+            show_timeline: false,
+            agent_control: true,
         }
     }
 }
@@ -134,6 +140,8 @@ impl App {
         s.show_guides = self.ui.show_guides;
         s.show_grid = self.ui.show_grid;
         s.snap = self.snap;
+        #[cfg(unix)]
+        crate::mcp::live::ENABLED.store(s.agent_control, std::sync::atomic::Ordering::Relaxed);
         s.picker = crate::color::picker_prefs(ctx);
         if (ctx.zoom_factor() - s.ui_scale).abs() > 1e-3 && enabled() {
             ctx.set_zoom_factor(s.ui_scale.clamp(0.5, 2.0));

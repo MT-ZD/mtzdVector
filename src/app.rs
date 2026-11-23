@@ -243,6 +243,8 @@ pub struct FontPicker {
 pub struct App {
     /// Identity of the active document's tab (see `tabs`).
     pub doc_uid: u64,
+    /// Playback, recording and timeline selection.
+    pub anim: crate::animation::AnimState,
     /// Open documents; the active one's slot is a stale placeholder (its
     /// state lives in the fields below).
     pub tabs: Vec<crate::tabs::DocTab>,
@@ -387,11 +389,16 @@ pub struct App {
     pub settings_last_save: f64,
     /// Command requested from inside a panel closure, run after the UI pass.
     pub pending_cmd: Option<crate::commands::Cmd>,
+    /// Agent (MCP) input and screenshots in flight.
+    #[cfg(unix)]
+    pub mcp: crate::mcp::live::State,
     /// Select this shape after the frame (panels can't change the selection mid-frame).
     pub pending_select: Option<u64>,
     pub icons: crate::icons::IconLibrary,
     pub session: crate::session::Session,
     pub egui_ctx: egui::Context,
+    /// An animation export in progress.
+    pub export_job: Option<crate::ui::export::ExportJob>,
     /// Drag & drop hovering the window (screen position).
     pub drop_hover: Option<egui::Pos2>,
     /// Document position the context menu was opened at ("Paste here").
@@ -429,6 +436,7 @@ impl App {
         let first = crate::tabs::DocTab::default();
         let mut app = App {
             doc_uid: crate::tabs::next_uid(),
+            anim: Default::default(),
             tabs: vec![first],
             tab: 0,
             doc: Document::default(),
@@ -524,10 +532,13 @@ impl App {
             settings_saved: Default::default(),
             settings_last_save: 0.0,
             pending_cmd: None,
+            #[cfg(unix)]
+            mcp: Default::default(),
             pending_select: None,
             icons: crate::icons::IconLibrary::new(ctx.clone()),
             session: Default::default(),
             egui_ctx: ctx.clone(),
+            export_job: None,
             drop_hover: None,
             menu_anchor_doc: None,
         };
@@ -737,6 +748,8 @@ impl App {
     pub fn undo(&mut self) {
         self.finish_pen();
         self.text_edit = None;
+        self.anim.rebase();
+        self.anim.selected.clear();
         if self.history.undo(&mut self.doc) {
             self.selection.retain(|id| self.doc.get(*id).is_some());
             self.node_sel.clear();
@@ -744,6 +757,8 @@ impl App {
     }
 
     pub fn redo(&mut self) {
+        self.anim.rebase();
+        self.anim.selected.clear();
         if self.history.redo(&mut self.doc) {
             self.selection.retain(|id| self.doc.get(*id).is_some());
             self.node_sel.clear();
@@ -1113,6 +1128,7 @@ impl App {
 
     pub fn new_document(&mut self) {
         self.doc = Document::default();
+        self.anim.rebase();
         self.doc.unit = self.settings.default_unit;
         self.history.clear();
         self.cache.invalidate_all();
@@ -1136,6 +1152,7 @@ impl App {
                 let n = doc.shapes().len();
                 self.tab_for_new();
                 self.doc = doc;
+                self.anim.rebase();
                 self.history.clear();
                 self.cache.invalidate_all();
                 self.selection.clear();
@@ -1153,12 +1170,13 @@ impl App {
 
     pub fn open_dialog(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
-            .add_filter("All supported", &["mvec", "svg", "svgz", "pdf", "eps", "ps", "ai"])
+            .add_filter("All supported", &["mvec", "svg", "svgz", "pdf", "eps", "ps", "ai", "json", "lottie"])
             .add_filter("mtzdVector", &["mvec"])
             .add_filter("SVG", &["svg", "svgz"])
             .add_filter("PDF", &["pdf"])
             .add_filter("Illustrator", &["ai"])
             .add_filter("EPS", &["eps", "ps"])
+            .add_filter("Lottie", &["json", "lottie"])
             .pick_files()
         {
             for p in p {
@@ -1205,19 +1223,60 @@ impl App {
                 Err(e) => self.notify(format!("Could not load image: {e}")),
             },
             _ => match io::open(path, &mut self.fonts) {
-                Ok(src) => {
+                Ok(mut src) => {
                     self.checkpoint("");
+                    // An animation: the timeline comes along (if this document
+                    // has none), and the shapes join at the playhead.
+                    if let Some(tl) = src.animation.clone() {
+                        match &mut self.doc.animation {
+                            None => self.doc.animation = Some(crate::animation::Timeline { time: 0.0, ..tl }),
+                            Some(own) => own.duration = own.duration.max(tl.duration),
+                        }
+                        let t = self.doc.animation.as_ref().map_or(0.0, |a| a.time);
+                        crate::animation::seek(&mut src, t.min(tl.duration));
+                        self.settings.show_timeline = true;
+                    }
                     let mut map = std::collections::HashMap::new();
                     for (k, img) in src.images.iter() {
                         map.insert(*k, self.doc.add_image(img.clone()));
                     }
-                    let mut ids = Vec::new();
-                    for s in src.shapes() {
-                        let mut s = Shape::clone(s);
+                    fn adopt(s: &mut Shape, map: &std::collections::HashMap<u64, u64>) {
                         s.id = 0;
-                        if let Some(Paint::Image(f)) = &mut s.fill {
-                            f.image = map.get(&f.image).copied().unwrap_or(f.image);
+                        for p in s.fill.iter_mut().chain(s.fills.iter_mut()) {
+                            if let Paint::Image(f) = p {
+                                f.image = map.get(&f.image).copied().unwrap_or(f.image);
+                            }
                         }
+                        if let Some(c) = s.kind.children_mut() {
+                            c.iter_mut().for_each(|c| adopt(c, map));
+                        }
+                    }
+                    let shapes: Vec<Shape> = src
+                        .shapes()
+                        .iter()
+                        .map(|s| {
+                            let mut s = Shape::clone(s);
+                            adopt(&mut s, &map);
+                            s
+                        })
+                        .collect();
+                    // An animation comes as one group, placed by its frame:
+                    // its keyed outlines are in the file's own coordinates,
+                    // so it moves as a whole (centred on the drop point or
+                    // the artboard).
+                    if src.animation.is_some() || matches!(io::format_of(path), Some(io::Format::Lottie)) {
+                        let mut g = Shape::new(ShapeKind::Group { children: shapes });
+                        g.fill = None;
+                        g.name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or("Animation".into());
+                        let target = at.unwrap_or(self.active().rect().center());
+                        crate::animation::translate(&mut g, target - src.primary().rect().center());
+                        let id = self.doc.add_shape(g);
+                        self.notify(format!("Placed {}", path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+                        self.selection = vec![id];
+                        return;
+                    }
+                    let mut ids = Vec::new();
+                    for s in shapes {
                         ids.push(self.doc.add_shape(s));
                     }
                     if let Some(at) = at {
@@ -1269,7 +1328,7 @@ impl App {
 
     pub fn place_dialog(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
-            .add_filter("Vector & images", &["svg", "pdf", "ai", "eps", "png", "jpg", "jpeg", "webp", "gif", "bmp"])
+            .add_filter("Vector & images", &["svg", "pdf", "ai", "eps", "json", "lottie", "png", "jpg", "jpeg", "webp", "gif", "bmp"])
             .pick_file()
         {
             self.place_path(&p, None);

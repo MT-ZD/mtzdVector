@@ -1052,7 +1052,14 @@ impl GeoCache {
             .strokes
             .iter()
             .filter_map(|st| {
-                let parts = crate::strokes::stroke_parts(&c.doc_path, st, shape.fill_rule);
+                let parts = match &c.clip {
+                    // Clipped like the main stroke.
+                    Some(clip) => {
+                        let area = crate::boolean::op(&crate::strokes::stroke_area(&c.doc_path, st, shape.fill_rule), clip, crate::boolean::BoolOp::Intersect);
+                        vec![crate::strokes::StrokePart::Fill(geom::polys_to_bez(&area), FillRule::EvenOdd)]
+                    }
+                    None => crate::strokes::stroke_parts(&c.doc_path, st, shape.fill_rule),
+                };
                 stroke_mesh(st, &parts, tol, shape.opacity)
             })
             .collect();
@@ -1392,6 +1399,8 @@ impl GeoCache {
             let noise_tex = (shape.noise > 0.0).then(|| self.noise_texture(&ctx));
             let ring_keys: Vec<Option<TexKey>> = self.map.get(&shape.id).unwrap().ring_meshes.iter().map(|m| m.texture).collect();
             let ring_tex: Vec<Option<TextureId>> = ring_keys.into_iter().map(|k| k.and_then(|k| self.texture(&ctx, doc, k, shape))).collect();
+            let extra_keys: Vec<Option<TexKey>> = self.map.get(&shape.id).unwrap().fill_extra.iter().map(|m| m.texture).collect();
+            let extra_tex: Vec<Option<TextureId>> = extra_keys.into_iter().map(|k| k.and_then(|k| self.texture(&ctx, doc, k, shape))).collect();
             let c = self.map.get(&shape.id).unwrap();
             for (r, t) in c.ring_meshes.iter().zip(ring_tex) {
                 if r.texture.is_none() || t.is_some() {
@@ -1403,7 +1412,16 @@ impl GeoCache {
                     add(to_mesh(f, view, tex_id));
                 }
             }
+            // More fills over the first, more strokes under the main one.
+            for (m, t) in c.fill_extra.iter().zip(extra_tex) {
+                if m.texture.is_none() || t.is_some() {
+                    add(to_mesh(m, view, t));
+                }
+            }
             for m in &c.extra_meshes {
+                add(to_mesh(m, view, None));
+            }
+            for m in &c.stroke_extra {
                 add(to_mesh(m, view, None));
             }
             if let Some(s) = &c.stroke {
@@ -1611,8 +1629,12 @@ fn stroke_mesh(s: &document::Stroke, parts: &[crate::strokes::StrokePart], tol: 
     }
     let mut verts = Vec::new();
     let mut indices = Vec::new();
+    // See-through strokes are filled as their outline: stroke triangles
+    // overlap at bends and would show as darker seams.
+    let see_through = s.color.a < 1.0 || opacity < 1.0;
     for part in parts.iter() {
         let (v, i) = match part {
+            crate::strokes::StrokePart::Line(p) if see_through => tessellate_fill_raw(&crate::strokes::outline(p, s, s.width), tol, FillRule::NonZero),
             crate::strokes::StrokePart::Line(p) => tessellate_stroke_raw(p, tol, s),
             crate::strokes::StrokePart::Fill(p, rule) => tessellate_fill_raw(p, tol, *rule),
         };

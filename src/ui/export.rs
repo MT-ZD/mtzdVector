@@ -117,7 +117,7 @@ fn body(app: &mut App, ui: &mut Ui) {
                 o.scale = (nh / base_h as f64).clamp(0.01, 64.0);
             }
         });
-        if o.format != Format::Jpg {
+        if !matches!(o.format, Format::Jpg | Format::Webm) {
             widgets::prop_row(ui, "Background", |ui| {
                 widgets::segmented(ui, &mut o.background, &[(true, "Artboard"), (false, "Transparent")]);
             });
@@ -127,7 +127,7 @@ fn body(app: &mut App, ui: &mut Ui) {
                 widgets::segmented(ui, &mut o.webp_lossy, &[(false, "Lossless"), (true, "Lossy")]);
             });
         }
-        if matches!(o.format, Format::Jpg | Format::Avif) || (o.format == Format::Webp && o.webp_lossy) {
+        if matches!(o.format, Format::Jpg | Format::Avif | Format::Webm) || (o.format == Format::Webp && o.webp_lossy) {
             let mut q = o.quality as f32;
             if widgets::slider_row(ui, "Quality", &mut q, 1.0..=100.0, "%") {
                 o.quality = q.round() as u8;
@@ -135,6 +135,9 @@ fn body(app: &mut App, ui: &mut Ui) {
         }
         if o.format == Format::Webp && !o.webp_lossy {
             ui.label(RichText::new("Exact colours, smaller than PNG for most artwork.").size(theme::FONT_SM).color(TEXT_DIM));
+        }
+        if o.format == Format::Webm {
+            animation_note(app, ui, "AV1 video of the timeline, on the artboard background (white where it's transparent). Plays in browsers and most players.");
         }
     } else {
         if opts.area == Area::AllArtboards && opts.format != Format::Pdf {
@@ -145,9 +148,26 @@ fn body(app: &mut App, ui: &mut Ui) {
             Format::Pdf => "",
             Format::Eps => "Vector EPS. Effects and image fills are not supported.",
             Format::Dxf => "DXF (R12) in millimetres for CAD, laser cutters and plotters: every outline as a polyline, one DXF layer per top-level layer. Fills, gradients and effects don't carry over; text is outlined.",
+            Format::Lottie => "",
             _ => "Vector SVG.",
         };
-        if !matches!(opts.format, Format::Eps | Format::Dxf) {
+        if opts.format == Format::Lottie {
+            let o = &mut app.ui.export.opts;
+            widgets::prop_row(ui, "Background", |ui| {
+                widgets::segmented(ui, &mut o.background, &[(true, "Artboard"), (false, "Transparent")]);
+            });
+            animation_note(app, ui, "Lottie JSON for the web and apps (lottie-web, LottieFiles, iOS and Android players). Text is outlined; effects, masks, blend modes and image fills are left out, and gradients become their first colour.");
+        }
+        if opts.format == Format::Svg && crate::animation::has_any(&app.doc) {
+            let o = &mut app.ui.export.opts;
+            widgets::prop_row(ui, "Animation", |ui| {
+                widgets::segmented(ui, &mut o.svg_animate, &[(true, "Animated"), (false, "Current frame")]);
+            });
+            if o.svg_animate {
+                animation_note(app, ui, "Plays the timeline in a loop with CSS animations, in browsers. Other apps show the first frame.");
+            }
+        }
+        if !matches!(opts.format, Format::Eps | Format::Dxf | Format::Lottie) {
             let o = &mut app.ui.export.opts;
             widgets::prop_row(ui, "Text", |ui| {
                 widgets::segmented(ui, &mut o.text_outlines, &[(false, "Text"), (true, "Outlines")]);
@@ -173,6 +193,19 @@ fn body(app: &mut App, ui: &mut Ui) {
             svg_options(app, ui);
         }
     }
+}
+
+/// What an animated export covers, or that there's nothing to animate.
+fn animation_note(app: &App, ui: &mut Ui, about: &str) {
+    let tl = app.doc.animation.clone().unwrap_or_default();
+    let text = if crate::animation::has_any(&app.doc) {
+        let (a, b) = tl.span();
+        let range = if tl.range.is_some() { format!(", {} – {} s", crate::io::num(a), crate::io::num(b)) } else { String::new() };
+        format!("{} frames at {} fps ({} s{range}). {about}", tl.span_frames(), tl.fps, crate::io::num(b - a))
+    } else {
+        "Nothing is animated yet: this exports a still. Turn on the timeline in Preferences and add keyframes.".to_string()
+    };
+    ui.label(RichText::new(text).size(theme::FONT_SM).color(TEXT_DIM));
 }
 
 /// Preset tiles for PDF. The highlighted tile is the one the options are
@@ -343,7 +376,45 @@ fn print_options(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// An animation export running in the background.
+pub struct ExportJob {
+    pub done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    rx: std::sync::mpsc::Receiver<Result<Vec<std::path::PathBuf>, String>>,
+    path: std::path::PathBuf,
+    opts: Options,
+}
+
+impl ExportJob {
+    /// Frames rendered and the total.
+    pub fn progress(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (self.done.load(Relaxed), self.total.load(Relaxed).max(1))
+    }
+}
+
 impl App {
+    /// Report a finished background export.
+    pub fn poll_export_job(&mut self) {
+        let Some(job) = &self.export_job else { return };
+        let r = match job.rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(_) => Err("the export stopped unexpectedly".into()),
+        };
+        let job = self.export_job.take().unwrap();
+        match r {
+            Ok(files) => {
+                match files.as_slice() {
+                    [one] => self.notify(format!("Exported {}", one.display())),
+                    many => self.notify(format!("Exported {} files", many.len())),
+                }
+                self.ui.export.last = Some((job.path, job.opts));
+            }
+            Err(e) => self.notify(format!("Export failed: {e}")),
+        }
+    }
+
     fn export_name(&self, opts: &Options) -> String {
         let stem = self.file_path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
         let mut name = stem;
@@ -376,6 +447,30 @@ impl App {
 
     pub fn export_to(&mut self, path: &std::path::Path, opts: &Options) {
         let active = self.active().id;
+        if crate::io::export::is_animated(&self.doc, opts) {
+            // Frame by frame: in the background, with progress in the status bar.
+            if self.export_job.is_some() {
+                self.notify("An export is already running");
+                return;
+            }
+            let (doc, sel, o, p, ctx) = (self.doc.clone(), self.selection.clone(), opts.clone(), path.to_path_buf(), self.egui_ctx.clone());
+            let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let total = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(crate::io::anim_export::timing(&doc).1));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (d2, t2) = (done.clone(), total.clone());
+            std::thread::spawn(move || {
+                let mut fonts = crate::fonts::FontManager::new(ctx.clone());
+                let r = crate::io::export::export_with_progress(&doc, &sel, active, &o, &p, &mut fonts, &mut |d, t| {
+                    d2.store(d, std::sync::atomic::Ordering::Relaxed);
+                    t2.store(t, std::sync::atomic::Ordering::Relaxed);
+                    ctx.request_repaint();
+                });
+                let _ = tx.send(r);
+                ctx.request_repaint();
+            });
+            self.export_job = Some(ExportJob { done, total, rx, path: path.to_path_buf(), opts: opts.clone() });
+            return;
+        }
         match crate::io::export::export(&self.doc, &self.selection, active, opts, path, &mut self.fonts) {
             Ok(files) => {
                 match files.as_slice() {

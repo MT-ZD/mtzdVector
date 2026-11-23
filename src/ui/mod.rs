@@ -2,6 +2,7 @@
 //! menu bar · toolbar · context toolbar · tools column · canvas with rulers ·
 //! studio dock · status bar, plus context menus and the quick-actions palette.
 
+pub mod agents;
 pub mod context_menu;
 pub mod dialogs;
 pub mod paint_dialogs;
@@ -15,6 +16,7 @@ pub mod rulers;
 pub mod statusbar;
 pub mod studio;
 pub mod theme;
+pub mod timeline;
 pub mod tools_panel;
 pub mod toolbar;
 pub mod widgets;
@@ -82,6 +84,7 @@ pub struct UiState {
     pub artboard_open: bool,
     pub shortcuts_open: bool,
     pub about_open: bool,
+    pub agents: agents::AgentsUi,
     /// Start screen with templates and recent documents.
     pub welcome_open: bool,
     pub welcome: welcome::WelcomeState,
@@ -122,6 +125,7 @@ impl Default for UiState {
             welcome: Default::default(),
             export: Default::default(),
             about_open: false,
+            agents: Default::default(),
             anchor: (0, 0),
             keys: Default::default(),
         }
@@ -141,6 +145,8 @@ impl UiState {
 impl eframe::App for App {
     /// Tablet pens (read through tablet-v2) drive the pointer like a mouse.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        #[cfg(unix)]
+        self.mcp_raw_input(ctx, raw);
         let Some(rx) = &self.platform.pen_rx else { return };
         let events: Vec<crate::platform::PenEvent> = rx.try_iter().collect();
         if events.is_empty() {
@@ -171,7 +177,7 @@ impl eframe::App for App {
 
 impl App {
     pub fn doc_name(&self) -> String {
-        self.file_path.as_ref().and_then(|p| p.file_name()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into())
+        self.file_path.as_ref().and_then(|p| p.file_name()).map(|s| s.to_string_lossy().to_string()).or(self.doc.title.clone()).unwrap_or_else(|| "Untitled".into())
     }
 
     /// One UI frame, independent of the windowing backend (also used headless).
@@ -201,12 +207,15 @@ impl App {
         self.layout_tick();
         self.live_tick();
         self.text_flow_tick();
+        self.anim_tick(&ctx);
+        self.poll_export_job();
         self.spell_tick(&ctx);
         self.print_tick(&ctx);
 
         menubar::show(self, ui);
         toolbar::show(self, ui);
         statusbar::show(self, ui);
+        timeline::show(self, ui);
         tools_panel::show(self, ui);
         if self.ui.show_studio {
             studio::show(self, ui);
@@ -229,6 +238,7 @@ impl App {
         context_menu::show(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        agents::show(self, &ctx);
         welcome::show(self, &ctx);
         export::show(self, &ctx);
         window::modal_overlay(self, &ctx);
@@ -246,6 +256,8 @@ impl App {
         }
         // Canvas edits: instances follow on the next frame (tick asks for it).
         self.components_tick();
+        #[cfg(unix)]
+        self.mcp_tick(&ctx);
         self.cache.prune(&self.doc);
     }
 
@@ -283,6 +295,44 @@ impl App {
             }
         });
         for p in presses {
+            // Over the timeline, Delete removes the selected keys, not layers.
+            if matches!(p.key, Key::Delete | Key::Backspace) && self.anim.hovered && !self.anim.selected.is_empty() && !ctx.egui_wants_keyboard_input() {
+                self.anim_delete_selected();
+                continue;
+            }
+            // Animation keys: K over a property keys it; over the timeline
+            // I / O set the in and out points and Ctrl+C / V copy keys.
+            let free = !ctx.egui_wants_keyboard_input();
+            let plain = p.mods.is_none();
+            let cmd_only = p.mods.command && !p.mods.shift && !p.mods.alt;
+            if free && plain && p.key == Key::K && !self.anim.hover_props.is_empty() && self.anim_key_hovered() {
+                continue;
+            }
+            if free && self.anim.hovered {
+                match p.key {
+                    Key::Space if plain => {
+                        self.anim_toggle_play();
+                        continue;
+                    }
+                    Key::I if plain => {
+                        self.anim_set_point(true);
+                        continue;
+                    }
+                    Key::O if plain => {
+                        self.anim_set_point(false);
+                        continue;
+                    }
+                    Key::C if cmd_only && !self.anim.selected.is_empty() => {
+                        self.anim_copy();
+                        continue;
+                    }
+                    Key::V if cmd_only && !self.anim.clipboard.is_empty() => {
+                        self.anim_paste();
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             if let Some(cmd) = commands::lookup(&p) {
                 if !self.scope_allowed(ctx, cmd.meta().scope) {
                     continue;

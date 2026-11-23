@@ -237,7 +237,7 @@ impl App {
                 i.pointer.delta(),
                 i.pointer.middle_down(),
                 i.pointer.primary_down(),
-                i.key_down(egui::Key::Space),
+                i.key_down(egui::Key::Space) && !i.modifiers.shift,
             )
         });
         let space = space && self.text_edit.is_none() && !ui.ctx().egui_wants_keyboard_input();
@@ -541,7 +541,8 @@ impl App {
             alt: i.modifiers.alt,
             cmd: i.modifiers.command,
         });
-        let space = ui.input(|i| i.key_down(egui::Key::Space)) && self.text_edit.is_none();
+        // Shift+Space plays the animation: no panning then.
+        let space = ui.input(|i| i.key_down(egui::Key::Space) && !i.modifiers.shift) && self.text_edit.is_none();
         self.cursor_doc = inp.pos.filter(|p| self.canvas_rect.contains(*p)).map(|p| self.view.to_doc(p));
 
         if self.text_edit.is_some() {
@@ -2131,8 +2132,41 @@ impl App {
         }
     }
 
+    /// Onion skin: outlines of the animated layers a few frames before
+    /// (red) and after (green) the playhead, fainter further away.
+    fn paint_onion(&mut self, painter: &egui::Painter) {
+        let o = self.anim.onion;
+        let Some(tl) = self.doc.animation.clone() else { return };
+        if !o.on || !self.settings.show_timeline || self.anim.playing {
+            return;
+        }
+        let key = (self.doc.revision(), tl.time.to_bits(), o.count, o.step, tl.fps.to_bits());
+        if self.anim.onion_cache.as_ref().map(|c| c.0) != Some(key) {
+            let mut ghosts = Vec::new();
+            for k in 1..=o.count {
+                for dir in [-1i32, 1] {
+                    let t = tl.time + dir as f64 * (k * o.step) as f64 / tl.fps;
+                    if !(-1e-9..=tl.duration + 1e-9).contains(&t) {
+                        continue;
+                    }
+                    for p in crate::animation::onion_paths(&self.doc, t, &mut self.fonts) {
+                        ghosts.push((p, dir * k as i32));
+                    }
+                }
+            }
+            self.anim.onion_cache = Some((key, ghosts));
+        }
+        let Some((_, ghosts)) = &self.anim.onion_cache else { return };
+        for (p, k) in ghosts {
+            let base = if *k < 0 { egui::Color32::from_rgb(235, 90, 90) } else { egui::Color32::from_rgb(70, 200, 130) };
+            let fade = 0.85 / k.unsigned_abs() as f32;
+            render::outline(painter, p, &self.view, Stroke::new(1.3, base.gamma_multiply(fade)));
+        }
+    }
+
     fn overlays(&mut self, painter: &egui::Painter) {
         let accent = theme::ACCENT;
+        self.paint_onion(painter);
         self.paint_guides(painter, self.canvas_rect);
 
         // Inside a boolean: show every sibling's outline (subtracted shapes

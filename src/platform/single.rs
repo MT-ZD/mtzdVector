@@ -16,12 +16,17 @@ use std::time::Duration;
 static PENDING: Mutex<Vec<Vec<PathBuf>>> = Mutex::new(Vec::new());
 
 fn socket_path() -> Option<PathBuf> {
+    runtime_path("instance")
+}
+
+/// `APP_ID.<suffix>` in the runtime dir shared by all instances.
+pub fn runtime_path(suffix: &str) -> Option<PathBuf> {
     let run = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
     let dir = match std::env::var("FLATPAK_ID") {
         Ok(id) => run.join("app").join(id),
         Err(_) => run,
     };
-    Some(dir.join(format!("{}.instance", super::desktop::APP_ID)))
+    Some(dir.join(format!("{}.{suffix}", super::desktop::APP_ID)))
 }
 
 /// Outcome of trying to become the primary instance.

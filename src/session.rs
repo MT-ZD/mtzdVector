@@ -228,6 +228,7 @@ impl App {
                 self.tab_for_new();
                 self.new_document();
                 self.doc = doc;
+                self.anim.rebase();
                 self.file_path = r.original.clone();
                 self.dirty = true;
                 self.ui.welcome_open = false;

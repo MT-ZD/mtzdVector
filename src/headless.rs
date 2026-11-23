@@ -37,17 +37,29 @@ pub struct Options {
     pub script: Option<String>,
 }
 
-struct Session {
+/// Simulated pointer: where it is and which modifiers are held.
+#[derive(Clone, Copy, Debug)]
+pub struct Pointer {
+    pub pos: egui::Pos2,
+    pub mods: egui::Modifiers,
+}
+
+impl Default for Pointer {
+    fn default() -> Self {
+        Pointer { pos: egui::pos2(1.0, 1.0), mods: egui::Modifiers::NONE }
+    }
+}
+
+pub struct Session {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: egui_wgpu::Renderer,
-    ctx: egui::Context,
-    app: App,
+    pub ctx: egui::Context,
+    pub app: App,
     size: [u32; 2],
     scale: f32,
     last: Option<egui::FullOutput>,
-    pos: egui::Pos2,
-    mods: egui::Modifiers,
+    pub ptr: Pointer,
     /// Simulated time per frame (keeps double-click and tooltips deterministic).
     t: f64,
 }
@@ -56,7 +68,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const MSAA: u32 = 4;
 
 impl Session {
-    fn new(opts: &Options) -> Result<Self, String> {
+    pub fn new(opts: &Options) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .map_err(|e| format!("no GPU adapter: {e}"))?;
@@ -76,13 +88,12 @@ impl Session {
             size: opts.size,
             scale: opts.scale,
             last: None,
-            pos: egui::pos2(1.0, 1.0),
-            mods: egui::Modifiers::NONE,
+            ptr: Pointer::default(),
             t: 0.0,
         })
     }
 
-    fn frame(&mut self, events: Vec<egui::Event>) {
+    pub fn frame(&mut self, events: Vec<egui::Event>) {
         self.app.dev_setup();
         self.t += 1.0 / 30.0;
         let [w, h] = self.size;
@@ -107,23 +118,18 @@ impl Session {
         self.last = Some(out);
     }
 
-    fn frames(&mut self, n: u32) {
+    pub fn frames(&mut self, n: u32) {
         for _ in 0..n {
             self.frame(Vec::new());
         }
     }
 
-    fn move_to(&mut self, p: egui::Pos2) {
-        self.pos = p;
-        self.frame(vec![egui::Event::PointerMoved(p)]);
-    }
-
-    fn button(&mut self, b: egui::PointerButton, pressed: bool) {
-        let e = egui::Event::PointerButton { pos: self.pos, button: b, pressed, modifiers: self.mods };
-        self.frame(vec![e]);
-    }
-
     fn render(&mut self, path: &str) -> Result<(), String> {
+        std::fs::write(path, self.render_png()?).map_err(|e| e.to_string())
+    }
+
+    /// The last frame as PNG bytes.
+    pub fn render_png(&mut self) -> Result<Vec<u8>, String> {
         let out = self.last.take().ok_or("no frame")?;
         let [w, h] = self.size;
         let jobs = self.ctx.tessellate(out.shapes.clone(), out.pixels_per_point);
@@ -185,7 +191,10 @@ impl Session {
         for y in 0..h as usize {
             pixels.extend_from_slice(&data[y * row as usize..y * row as usize + (w * 4) as usize]);
         }
-        image::RgbaImage::from_raw(w, h, pixels).ok_or("bad image")?.save(path).map_err(|e| e.to_string())
+        let img = image::RgbaImage::from_raw(w, h, pixels).ok_or("bad image")?;
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+        Ok(png)
     }
 
     fn dump(&mut self) {
@@ -202,23 +211,18 @@ impl Session {
         }
     }
 
-    fn doc_to_screen(&self, x: f32, y: f32) -> egui::Pos2 {
-        self.app.view.to_screen(kurbo::Point::new(x as f64, y as f64))
-    }
-
-    fn run_line(&mut self, line: &str) -> Result<(), String> {
+    pub fn run_line(&mut self, line: &str) -> Result<(), String> {
         let words = split_words(line);
         let Some(cmd) = words.first().map(|s| s.as_str()) else { return Ok(()) };
+        let view = self.app.view;
+        if let Some(batches) = input_events(&words, &mut self.ptr, &|x, y| view.to_screen(kurbo::Point::new(x as f64, y as f64)))? {
+            for b in batches {
+                self.frame(b);
+            }
+            return Ok(());
+        }
         let nums: Vec<f32> = words[1..].iter().filter_map(|w| w.parse().ok()).collect();
-        let doc = matches!(cmd, "dmove" | "dclick" | "ddrag");
-        let base = if doc { &cmd[1..] } else { cmd };
-        let pt = |s: &Self, i: usize| -> Result<egui::Pos2, String> {
-            let (x, y) = (*nums.get(i).ok_or("missing x")?, *nums.get(i + 1).ok_or("missing y")?);
-            Ok(if doc { s.doc_to_screen(x, y) } else { egui::pos2(x, y) })
-        };
-        let right = words.iter().any(|w| w == "right");
-        let btn = if right { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
-        match base {
+        match cmd {
             "frames" => self.frames(nums.first().copied().unwrap_or(1.0) as u32),
             // Let background work (downloads) finish: wall-clock wait while pumping frames.
             "wait" => {
@@ -229,13 +233,7 @@ impl Session {
                 }
             }
             "tool" => {
-                let name = words.get(1).ok_or("tool name")?.to_lowercase();
-                let t = crate::commands::Cmd::TOOLS
-                    .iter()
-                    .filter_map(|c| if let crate::commands::Cmd::Tool(t) = c { Some(*t) } else { None })
-                    .chain(crate::prims::PrimKind::ALL.into_iter().map(crate::app::Tool::Prim))
-                    .find(|t| [format!("{t:?}"), t.name().to_string(), format!("{t:?}").trim_start_matches("Prim(").trim_end_matches(')').to_string()].iter().any(|n| n.to_lowercase() == name))
-                    .ok_or(format!("unknown tool {name}"))?;
+                let t = find_tool(words.get(1).ok_or("tool name")?)?;
                 self.app.set_tool(t);
                 self.frame(Vec::new());
             }
@@ -261,66 +259,9 @@ impl Session {
                 self.frame(Vec::new());
             }
             "cmd" => {
-                let name = words[1..].join(" ").to_lowercase();
-                let c = crate::commands::Cmd::all()
-                    .into_iter()
-                    .find(|c| format!("{c:?}").to_lowercase() == name || c.label().to_lowercase() == name)
-                    .ok_or(format!("unknown command {name}"))?;
+                let c = find_cmd(&words[1..].join(" "))?;
                 c.run(&mut self.app, &self.ctx.clone());
                 self.frame(Vec::new());
-            }
-            "move" => {
-                let p = pt(self, 0)?;
-                self.move_to(p);
-            }
-            "down" => self.button(btn, true),
-            "up" => self.button(btn, false),
-            "click" => {
-                let p = pt(self, 0)?;
-                self.move_to(p);
-                self.button(btn, true);
-                self.button(btn, false);
-                self.frames(2);
-            }
-            "dblclick" => {
-                let p = egui::pos2(*nums.first().ok_or("x")?, *nums.get(1).ok_or("y")?);
-                self.move_to(p);
-                for _ in 0..2 {
-                    self.button(egui::PointerButton::Primary, true);
-                    self.button(egui::PointerButton::Primary, false);
-                }
-                self.frames(2);
-            }
-            "drag" => {
-                let (a, b) = (pt(self, 0)?, pt(self, 2)?);
-                let steps = nums.get(4).copied().unwrap_or(10.0).max(1.0) as usize;
-                self.move_to(a);
-                self.button(btn, true);
-                for i in 1..=steps {
-                    self.move_to(a + (b - a) * (i as f32 / steps as f32));
-                }
-                self.button(btn, false);
-                self.frames(2);
-            }
-            "mods" => {
-                let has = |k: &str| words.iter().any(|w| w == k);
-                self.mods = egui::Modifiers { shift: has("shift"), alt: has("alt"), ctrl: has("ctrl"), command: has("ctrl"), mac_cmd: false };
-                self.frame(vec![egui::Event::ModifiersChanged(self.mods)]);
-            }
-            "key" => {
-                let name = words.get(1).ok_or("key name")?;
-                let key = egui::Key::from_name(name)
-                    .or_else(|| egui::Key::from_name(name.trim_start_matches("Num")))
-                    .or_else(|| egui::Key::ALL.iter().copied().find(|k| format!("{k:?}").eq_ignore_ascii_case(name)))
-                    .ok_or(format!("unknown key {name}"))?;
-                let has = |k: &str| words.iter().any(|w| w == k);
-                let modifiers = egui::Modifiers { shift: has("shift"), alt: has("alt"), ctrl: has("ctrl"), command: has("ctrl"), mac_cmd: false };
-                let ev = |pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
-                self.frame(vec![ev(true)]);
-                self.frame(vec![ev(false)]);
-            }
-            "type" => {
-                self.frame(vec![egui::Event::Text(words[1..].join(" "))]);
             }
             "shot" => {
                 // Let fade-in animations finish.
@@ -371,8 +312,94 @@ impl Session {
     }
 }
 
+/// Tool by debug name or label (`rect`, `Rectangle`, `Prim(Arrow)`, `arrow`).
+pub fn find_tool(name: &str) -> Result<crate::app::Tool, String> {
+    let name = name.to_lowercase();
+    crate::commands::Cmd::TOOLS
+        .iter()
+        .filter_map(|c| if let crate::commands::Cmd::Tool(t) = c { Some(*t) } else { None })
+        .chain(crate::prims::PrimKind::ALL.into_iter().map(crate::app::Tool::Prim))
+        .find(|t| [format!("{t:?}"), t.name().to_string(), format!("{t:?}").trim_start_matches("Prim(").trim_end_matches(')').to_string()].iter().any(|n| n.to_lowercase() == name))
+        .ok_or(format!("unknown tool {name}"))
+}
+
+/// Command by debug name or label (`Union`, `"Opacity 50%"`, `Tool(Pen)`).
+pub fn find_cmd(name: &str) -> Result<crate::commands::Cmd, String> {
+    let name = name.to_lowercase();
+    crate::commands::Cmd::all()
+        .into_iter()
+        .find(|c| format!("{c:?}").to_lowercase() == name || c.label().to_lowercase() == name)
+        .ok_or(format!("unknown command {name}"))
+}
+
+/// Pointer and keyboard script commands (`move`, `down`, `up`, `click`,
+/// `dblclick`, `drag`, `mods`, `key`, `type`; `d`-prefixed pointer commands
+/// take document coordinates, mapped by `to_screen`) as event batches, one
+/// per frame. `None` when `words` is not an input command.
+pub fn input_events(words: &[String], ptr: &mut Pointer, to_screen: &dyn Fn(f32, f32) -> egui::Pos2) -> Result<Option<Vec<Vec<egui::Event>>>, String> {
+    use egui::Event;
+    let Some(cmd) = words.first().map(|s| s.as_str()) else { return Ok(None) };
+    let nums: Vec<f32> = words[1..].iter().filter_map(|w| w.parse().ok()).collect();
+    let doc = matches!(cmd, "dmove" | "dclick" | "ddblclick" | "ddrag");
+    let base = if doc { &cmd[1..] } else { cmd };
+    let pt = |i: usize| -> Result<egui::Pos2, String> {
+        let (x, y) = (*nums.get(i).ok_or("missing x")?, *nums.get(i + 1).ok_or("missing y")?);
+        Ok(if doc { to_screen(x, y) } else { egui::pos2(x, y) })
+    };
+    let has = |k: &str| words.iter().any(|w| w == k);
+    let button = if has("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+    let mut out: Vec<Vec<Event>> = Vec::new();
+    let press = |ptr: &Pointer, button, pressed| vec![Event::PointerButton { pos: ptr.pos, button, pressed, modifiers: ptr.mods }];
+    let move_to = |ptr: &mut Pointer, out: &mut Vec<Vec<Event>>, p: egui::Pos2| {
+        ptr.pos = p;
+        out.push(vec![Event::PointerMoved(p)]);
+    };
+    match base {
+        "move" => move_to(ptr, &mut out, pt(0)?),
+        "down" => out.push(press(ptr, button, true)),
+        "up" => out.push(press(ptr, button, false)),
+        "click" | "dblclick" => {
+            move_to(ptr, &mut out, pt(0)?);
+            for _ in 0..if base == "click" { 1 } else { 2 } {
+                out.push(press(ptr, button, true));
+                out.push(press(ptr, button, false));
+            }
+            out.extend([vec![], vec![]]);
+        }
+        "drag" => {
+            let (a, b) = (pt(0)?, pt(2)?);
+            let steps = nums.get(4).copied().unwrap_or(10.0).max(1.0) as usize;
+            move_to(ptr, &mut out, a);
+            out.push(press(ptr, button, true));
+            for i in 1..=steps {
+                move_to(ptr, &mut out, a + (b - a) * (i as f32 / steps as f32));
+            }
+            out.push(press(ptr, button, false));
+            out.extend([vec![], vec![]]);
+        }
+        "mods" => {
+            ptr.mods = egui::Modifiers { shift: has("shift"), alt: has("alt"), ctrl: has("ctrl"), command: has("ctrl"), mac_cmd: false };
+            out.push(vec![Event::ModifiersChanged(ptr.mods)]);
+        }
+        "key" => {
+            let name = words.get(1).ok_or("key name")?;
+            let key = egui::Key::from_name(name)
+                .or_else(|| egui::Key::from_name(name.trim_start_matches("Num")))
+                .or_else(|| egui::Key::ALL.iter().copied().find(|k| format!("{k:?}").eq_ignore_ascii_case(name)))
+                .ok_or(format!("unknown key {name}"))?;
+            let modifiers = egui::Modifiers { shift: has("shift"), alt: has("alt"), ctrl: has("ctrl"), command: has("ctrl"), mac_cmd: false };
+            let ev = |pressed| Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+            out.push(vec![ev(true)]);
+            out.push(vec![ev(false)]);
+        }
+        "type" => out.push(vec![Event::Text(words[1..].join(" "))]),
+        _ => return Ok(None),
+    }
+    Ok(Some(out))
+}
+
 /// Split on whitespace, honoring double quotes.
-fn split_words(line: &str) -> Vec<String> {
+pub fn split_words(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;

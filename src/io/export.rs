@@ -21,10 +21,14 @@ pub enum Format {
     Avif,
     /// AutoCAD drawing exchange (outlines as polylines).
     Dxf,
+    /// AV1 video of the timeline.
+    Webm,
+    /// Lottie (Bodymovin) JSON animation.
+    Lottie,
 }
 
 impl Format {
-    pub const ALL: [Format; 8] = [Format::Png, Format::Jpg, Format::Webp, Format::Avif, Format::Svg, Format::Pdf, Format::Eps, Format::Dxf];
+    pub const ALL: [Format; 10] = [Format::Png, Format::Jpg, Format::Webp, Format::Avif, Format::Svg, Format::Pdf, Format::Eps, Format::Dxf, Format::Webm, Format::Lottie];
 
     /// From a file extension (case-insensitive).
     pub fn from_ext(ext: &str) -> Option<Format> {
@@ -42,6 +46,8 @@ impl Format {
             Format::Webp => "webp",
             Format::Avif => "avif",
             Format::Dxf => "dxf",
+            Format::Webm => "webm",
+            Format::Lottie => "json",
         }
     }
 
@@ -55,11 +61,18 @@ impl Format {
             Format::Webp => "WebP",
             Format::Avif => "AVIF",
             Format::Dxf => "DXF",
+            Format::Webm => "WebM",
+            Format::Lottie => "Lottie",
         }
     }
 
     pub fn is_raster(self) -> bool {
-        matches!(self, Format::Png | Format::Jpg | Format::Webp | Format::Avif)
+        matches!(self, Format::Png | Format::Jpg | Format::Webp | Format::Avif | Format::Webm)
+    }
+
+    /// Only makes sense for an animated document.
+    pub fn is_animation(self) -> bool {
+        matches!(self, Format::Webm | Format::Lottie)
     }
 }
 
@@ -92,6 +105,9 @@ pub struct Options {
     pub svg: super::svg::SvgOptions,
     /// PDF: image quality and metadata.
     pub pdf: super::pdf::PdfSettings,
+    /// SVG of an animated document: play the timeline with CSS animations
+    /// (otherwise the frame at the playhead).
+    pub svg_animate: bool,
 }
 
 /// Starting points for PDF settings.
@@ -154,7 +170,51 @@ pub struct PreviewPage {
 }
 
 fn keeps_background(opts: &Options) -> bool {
-    !(matches!(opts.format, Format::Png | Format::Webp | Format::Avif) && !opts.background)
+    !(matches!(opts.format, Format::Png | Format::Webp | Format::Avif | Format::Lottie) && !opts.background)
+}
+
+/// Whether the export plays the timeline (rather than one frame).
+pub fn is_animated(doc: &Document, opts: &Options) -> bool {
+    opts.format.is_animation() || (opts.format == Format::Svg && opts.svg_animate && crate::animation::has_any(doc))
+}
+
+/// The exported area at every frame of the timeline, and one closing frame
+/// at its end. A selection is cropped to where it goes over the whole
+/// animation.
+pub fn animation_pages(doc: &Document, selection: &[u64], artboard: Option<u64>, keep_bg: bool, fonts: &mut FontManager) -> Result<Vec<Document>, String> {
+    let (fps, n) = super::anim_export::timing(doc);
+    let start = doc.animation.as_ref().map_or(0.0, |a| a.span().0);
+    let docs: Vec<Document> = (0..=n)
+        .map(|i| {
+            let mut d = crate::animation::frame(doc, start + i as f64 / fps);
+            // Animated step counts: live blends follow.
+            crate::paint_ops::regen_blends_in(&mut d, fonts);
+            d
+        })
+        .collect();
+    match artboard {
+        Some(id) => Ok(docs
+            .iter()
+            .map(|d| {
+                let mut p = d.page(id);
+                if !keep_bg {
+                    p.primary_mut().background = Rgba::WHITE.with_alpha(0.0);
+                }
+                p
+            })
+            .collect()),
+        None => {
+            let mut b: Option<Rect> = None;
+            for d in &docs {
+                let shapes: Vec<&Shape> = selection.iter().filter_map(|id| d.get(*id)).collect();
+                if let Some(r) = visual_bounds(&shapes, fonts) {
+                    b = crate::geom::union_rect(b, r);
+                }
+            }
+            let b = b.ok_or("Nothing selected to export")?;
+            docs.iter().map(|d| selection_document_in(d, selection, b, keep_bg).ok_or_else(|| "Nothing selected to export".to_string())).collect()
+        }
+    }
 }
 
 /// Longest side of a preview, in pixels.
@@ -210,7 +270,8 @@ fn soft_proof(image: &mut image::RgbaImage, conv: &crate::print::ColorConv) {
 /// Total bytes the export would write, or None for very large rasters.
 pub fn exported_size(doc: &Document, selection: &[u64], active: u64, opts: &Options, fonts: &mut FontManager) -> Result<Option<u64>, String> {
     let (w, h) = raster_size(doc.primary(), None, opts.scale);
-    if opts.format.is_raster() && (w as u64) * (h as u64) > 40_000_000 {
+    // Video would mean encoding it all: no estimate.
+    if opts.format == Format::Webm || (opts.format.is_raster() && (w as u64) * (h as u64) > 40_000_000) {
         return Ok(None);
     }
     let dir = super::eps::private_temp_dir()?;
@@ -222,7 +283,7 @@ pub fn exported_size(doc: &Document, selection: &[u64], active: u64, opts: &Opti
 
 impl Default for Options {
     fn default() -> Self {
-        Options { format: Format::Png, area: Area::Artboard, scale: 1.0, background: true, quality: 90, webp_lossy: false, text_outlines: false, print: Default::default(), svg: Default::default(), pdf: Default::default() }
+        Options { format: Format::Png, area: Area::Artboard, scale: 1.0, background: true, quality: 90, webp_lossy: false, text_outlines: false, print: Default::default(), svg: Default::default(), pdf: Default::default(), svg_animate: true }
     }
 }
 
@@ -245,6 +306,13 @@ pub fn visual_bounds(shapes: &[&Shape], fonts: &mut FontManager) -> Option<Rect>
 
 /// A document holding just `ids`, cropped to their visual bounds.
 pub fn selection_document(doc: &Document, ids: &[u64], fonts: &mut FontManager, keep_background: bool) -> Option<Document> {
+    let shapes: Vec<&Shape> = ids.iter().filter_map(|id| doc.get(*id)).collect();
+    let b = visual_bounds(&shapes, fonts)?;
+    selection_document_in(doc, ids, b, keep_background)
+}
+
+/// A document holding just `ids`, cropped to `b`.
+pub fn selection_document_in(doc: &Document, ids: &[u64], b: Rect, keep_background: bool) -> Option<Document> {
     // Paint order, skipping shapes whose container is also selected.
     let mut ids: Vec<u64> = ids.iter().copied().filter(|id| doc.get(*id).is_some()).collect();
     ids.sort_by_key(|id| doc.order_key(*id));
@@ -260,7 +328,9 @@ pub fn selection_document(doc: &Document, ids: &[u64], fonts: &mut FontManager, 
         true
     });
     let shapes: Vec<&Shape> = ids.iter().filter_map(|id| doc.get(*id)).collect();
-    let b = visual_bounds(&shapes, fonts)?;
+    if shapes.is_empty() {
+        return None;
+    }
     let b = Rect::new(b.x0.floor(), b.y0.floor(), b.x1.ceil(), b.y1.ceil());
     let mut tmp = Document::default();
     tmp.set_size(b.width(), b.height());
@@ -282,9 +352,15 @@ pub fn selection_document(doc: &Document, ids: &[u64], fonts: &mut FontManager, 
 /// Render a document to straight-alpha RGBA at `scale`.
 pub fn rasterize(doc: &Document, fonts: &mut FontManager, scale: f64) -> Result<image::RgbaImage, String> {
     let svg = super::svg::export(doc, fonts);
-    let opt = usvg::Options::default();
-    let tree = usvg::Tree::from_str(&svg, &opt).map_err(|e| e.to_string())?;
     let (w, h) = raster_size(doc.primary(), None, scale);
+    render_svg(&svg, w, h)
+}
+
+/// Render exported SVG text at `w` × `h` px. Needs no fonts (text is already
+/// outlined), so frames can be rendered on worker threads.
+pub fn render_svg(svg: &str, w: u32, h: u32) -> Result<image::RgbaImage, String> {
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| e.to_string())?;
     if (w as u64) * (h as u64) > 400_000_000 {
         return Err(format!("{w} × {h} px is too large"));
     }
@@ -294,9 +370,9 @@ pub fn rasterize(doc: &Document, fonts: &mut FontManager, scale: f64) -> Result<
     let sy = h as f32 / tree.size().height();
     resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(sx, sy), &mut pixmap.as_mut());
     let mut img = image::RgbaImage::new(w, h);
-    for (i, p) in pixmap.pixels().iter().enumerate() {
+    for (o, p) in img.as_mut().chunks_exact_mut(4).zip(pixmap.pixels()) {
         let c = p.demultiply();
-        img.as_mut()[i * 4..i * 4 + 4].copy_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+        o.copy_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
     }
     Ok(img)
 }
@@ -318,7 +394,26 @@ pub fn artboard_path(path: &Path, artboard: &str) -> std::path::PathBuf {
 /// Export `doc` to `path` with `opts`: the artboard `active`, every
 /// artboard, or the shapes `selection`. Returns the files written.
 pub fn export(doc: &Document, selection: &[u64], active: u64, opts: &Options, path: &Path, fonts: &mut FontManager) -> Result<Vec<std::path::PathBuf>, String> {
+    export_with_progress(doc, selection, active, opts, path, fonts, &mut |_, _| {})
+}
+
+/// `export`, reporting animation frames done out of the total.
+pub fn export_with_progress(doc: &Document, selection: &[u64], active: u64, opts: &Options, path: &Path, fonts: &mut FontManager, progress: &mut dyn FnMut(usize, usize)) -> Result<Vec<std::path::PathBuf>, String> {
     let keep_bg = keeps_background(opts);
+    if is_animated(doc, opts) {
+        let targets: Vec<(Option<u64>, std::path::PathBuf)> = match opts.area {
+            Area::Selection => vec![(None, path.to_path_buf())],
+            Area::Artboard => vec![(Some(doc.artboard(active).map(|a| a.id).unwrap_or(doc.primary().id)), path.to_path_buf())],
+            Area::AllArtboards => doc.artboards.iter().map(|a| (Some(a.id), if doc.artboards.len() == 1 { path.to_path_buf() } else { artboard_path(path, &a.name) })).collect(),
+        };
+        let mut out = Vec::new();
+        for (artboard, p) in targets {
+            let pages = animation_pages(doc, selection, artboard, keep_bg, fonts)?;
+            write_animation(&pages, opts, &p, fonts, progress)?;
+            out.push(p);
+        }
+        return Ok(out);
+    }
     let prep = |mut d: Document| {
         if !keep_bg {
             d.primary_mut().background = Rgba::WHITE.with_alpha(0.0);
@@ -356,6 +451,20 @@ pub fn export(doc: &Document, selection: &[u64], active: u64, opts: &Options, pa
 fn pdf_options(opts: &Options, path: &Path) -> super::pdf::PdfOptions {
     let title = if opts.pdf.title.is_empty() { path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() } else { opts.pdf.title.clone() };
     super::pdf::PdfOptions { real_text: !opts.text_outlines, print: opts.print.clone(), title, settings: opts.pdf.clone() }
+}
+
+/// Write the frames of an animation (see `animation_pages`).
+fn write_animation(pages: &[Document], opts: &Options, path: &Path, fonts: &mut FontManager, progress: &mut dyn FnMut(usize, usize)) -> Result<(), String> {
+    let (fps, _) = super::anim_export::timing(&pages[0]);
+    let data = match opts.format {
+        Format::Webm => super::anim_export::webm(pages, fps, opts.scale, opts.quality, fonts, progress)?,
+        Format::Lottie => {
+            let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            super::anim_export::lottie(pages, fps, &name, fonts).into_bytes()
+        }
+        _ => super::anim_export::svg(pages, fps, fonts, &super::svg::SvgOptions { real_text: !opts.text_outlines, ..opts.svg.clone() }).into_bytes(),
+    };
+    std::fs::write(path, data).map_err(|e| e.to_string())
 }
 
 /// Write a single-page document (first artboard at the origin).
@@ -402,6 +511,8 @@ fn write_one(src: &Document, opts: &Options, path: &Path, fonts: &mut FontManage
             write(out)
         }
         Format::Dxf => write(super::dxf::export(src, fonts).into_bytes()),
+        // A still: one frame held.
+        Format::Webm | Format::Lottie => write_animation(&[src.clone(), src.clone()], opts, path, fonts, &mut |_, _| {}),
     }
 }
 

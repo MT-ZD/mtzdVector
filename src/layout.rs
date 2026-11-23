@@ -274,6 +274,39 @@ impl App {
         any
     }
 
+    /// Lay out `children` (not in the document: an instance being rebuilt)
+    /// by `l`, the way `relayout` does for a group in the document.
+    pub fn flow_children(&mut self, l: &AutoLayout, children: &mut [Shape]) {
+        let mut members: Vec<(u64, Rect)> = Vec::new();
+        let mut origin = None;
+        for c in children.iter() {
+            let b = self.cache.update(c, &mut self.fonts).bounds;
+            if Some(c.id) == l.background {
+                origin = b.map(|r| r.origin());
+            } else if c.visible
+                && let Some(b) = b
+            {
+                members.push((c.id, b));
+            }
+        }
+        let origin = origin
+            .or_else(|| members.iter().map(|m| m.1).reduce(|a, b| a.union(b)).map(|r| kurbo::Point::new(r.x0 - l.padding[3], r.y0 - l.padding[0])))
+            .unwrap_or_default();
+        let (moves, rect) = arrange(l, origin, &members);
+        for c in children.iter_mut() {
+            if let Some((_, d)) = moves.iter().find(|m| m.0 == c.id).filter(|m| m.1.hypot() > 1e-6) {
+                c.apply_transform(Affine::translate(*d));
+            }
+            if Some(c.id) == l.background
+                && let ShapeKind::Rect { w, h, .. } = &mut c.kind
+            {
+                *w = rect.width().max(0.0);
+                *h = rect.height().max(0.0);
+                c.transform = Affine::translate((rect.x0, rect.y0));
+            }
+        }
+    }
+
     /// Give the selected group (or the selection, grouped) an auto layout.
     pub fn add_auto_layout(&mut self) {
         let shapes = self.selected_bottom_up();

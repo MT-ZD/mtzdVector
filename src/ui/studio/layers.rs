@@ -483,6 +483,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 }
                 if show_icons || !visible {
                     let r = widgets::mini_icon(ui, if visible { icon::EYE } else { icon::EYE_SLASH }, if visible { TEXT_DIM } else { TEXT });
+                    app.anim_hover(ui, r.rect, Some(*id), &[crate::animation::Prop::Visible]);
                     if widgets::tip(r, if visible { "Hide" } else { "Show" }, None).clicked() {
                         app.checkpoint("");
                         if let Some(s) = app.doc.get_mut(*id) {

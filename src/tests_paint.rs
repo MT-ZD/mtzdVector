@@ -514,3 +514,40 @@ fn width_profile_applies_along_a_straight_line() {
     let b = crate::geom::path_bounds(&crate::strokes::variable_outline(&path, &st)).unwrap();
     assert!(b.height() > 19.0, "{b:?}");
 }
+
+#[test]
+fn blend_steps_animate_from_zero() {
+    use crate::animation::{self, Prop, Timeline};
+    let mut app = App::new(egui::Context::default(), None);
+    let a = app.doc.add_shape(rect(0.0, 0.0, 10.0, 10.0, "#000000"));
+    let b = app.doc.add_shape(rect(100.0, 0.0, 10.0, 10.0, "#ffffff"));
+    app.selection = vec![a, b];
+    app.blend_selection(0);
+    let g = app.selection[0];
+    let count = |app: &App| app.doc.get(g).unwrap().kind.children().unwrap().len();
+    assert_eq!(count(&app), 2, "no steps: just the ends");
+    app.doc.animation = Some(Timeline::default());
+    let base = app.doc.clone();
+    app.set_blend_steps(g, 10);
+    animation::capture_edits(&base, &mut app.doc, true, &[g]);
+    let anim = app.doc.get(g).unwrap().anim.as_deref().unwrap().clone();
+    // Seeking needs a key at 1 s: move the 10 there.
+    assert_eq!(anim.track(Prop::BlendSteps).unwrap().keys.len(), 1);
+    assert!(anim.tracks.iter().all(|t| t.prop == Prop::BlendSteps), "the steps themselves aren't keyed: {anim:?}");
+    animation::edit_keys(&mut app.doc, |d| {
+        let mut s = d.get(g).unwrap().clone();
+        let tr = s.anim.as_deref_mut().unwrap().track_mut(Prop::BlendSteps);
+        tr.keys[0].t = 1.0;
+        tr.set(0.0, animation::Value::Num(0.0));
+        tr.keys[0].ease = animation::Ease::Linear;
+        d.replace(s);
+    });
+    animation::seek(&mut app.doc, 0.5);
+    app.live_tick();
+    assert_eq!(count(&app), 7, "5 steps halfway");
+    // Exported frames rebuild the steps too.
+    let pages = crate::io::export::animation_pages(&app.doc, &[g], None, false, &mut fonts()).unwrap();
+    let n = |d: &Document| d.shapes().iter().map(|s| s.kind.children().map_or(1, |c| c.len())).sum::<usize>();
+    assert_eq!(n(&pages[0]), 2);
+    assert_eq!(n(pages.last().unwrap()), 12);
+}

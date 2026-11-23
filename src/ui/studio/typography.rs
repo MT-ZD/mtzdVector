@@ -6,6 +6,7 @@ use egui_phosphor::regular as icon;
 
 use super::{design, edit_style};
 use crate::ui::widgets::WellPaint;
+use crate::animation::Prop;
 use crate::app::{App, FontSource};
 use crate::document::{ShapeKind, TextAlign, TextData};
 use crate::fonts::{self, LoadState};
@@ -218,20 +219,22 @@ fn char_props(app: &mut App, ui: &mut Ui, td: &mut TextData, id: &str) -> Option
     ui.horizontal(|ui| {
         let current = format!("{}{}", weight_name(td.weight), if td.italic { " Italic" } else { "" });
         let ww = (ui.available_width() - 96.0).max(90.0);
-        widgets::dropdown(ui, ("weight", id), current, ww, |ui| {
-            for (wt, it) in &weights {
-                let label = format!("{}{}", weight_name(*wt), if *it { " Italic" } else { "" });
-                if ui.selectable_label(td.weight == *wt && td.italic == *it, label).clicked() {
-                    td.weight = *wt;
-                    td.italic = *it;
+        super::design::key_field(app, ui, Prop::FontWeight, |ui| {
+            widgets::dropdown(ui, ("weight", id), current, ww, |ui| {
+                for (wt, it) in &weights {
+                    let label = format!("{}{}", weight_name(*wt), if *it { " Italic" } else { "" });
+                    if ui.selectable_label(td.weight == *wt && td.italic == *it, label).clicked() {
+                        td.weight = *wt;
+                        td.italic = *it;
+                    }
                 }
-            }
+            })
         });
-        widgets::num_field(ui, "", &mut td.size, Num::raw_px().range(1.0, 2000.0).speed(0.5), 88.0);
+        super::design::key_field(app, ui, Prop::FontSize, |ui| widgets::num_field(ui, "", &mut td.size, Num::raw_px().range(1.0, 2000.0).speed(0.5), 88.0));
     });
     let fw = ((ui.available_width() - 8.0) / 2.0).max(60.0);
     ui.horizontal(|ui| {
-        widgets::tip(widgets::num_field(ui, icon::ARROWS_LEFT_RIGHT, &mut td.letter_spacing, Num::raw_px().range(-50.0, 200.0).speed(0.1), fw), "Letter spacing", None);
+        super::design::key_field(app, ui, Prop::LetterSpacing, |ui| widgets::tip(widgets::num_field(ui, icon::ARROWS_LEFT_RIGHT, &mut td.letter_spacing, Num::raw_px().range(-50.0, 200.0).speed(0.1), fw), "Letter spacing", None));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             widgets::tip(widgets::icon_toggle(ui, &mut td.strike, icon::TEXT_STRIKETHROUGH), "Strikethrough", None);
@@ -333,7 +336,7 @@ fn opentype_props(app: &mut App, ui: &mut Ui, td: &mut TextData, id: &str) {
 fn para_props(app: &mut App, ui: &mut Ui, td: &mut TextData) {
     let fw = ((ui.available_width() - 8.0) / 2.0).max(60.0);
     ui.horizontal(|ui| {
-        widgets::tip(widgets::num_field(ui, icon::ARROWS_DOWN_UP, &mut td.line_height, Num::default().range(0.5, 4.0).speed(0.01).suffix("×"), fw), "Line height", None);
+        super::design::key_field(app, ui, Prop::LineHeight, |ui| widgets::tip(widgets::num_field(ui, icon::ARROWS_DOWN_UP, &mut td.line_height, Num::default().range(0.5, 4.0).speed(0.01).suffix("×"), fw), "Line height", None));
         widgets::tip(widgets::num_field(ui, icon::PARAGRAPH, &mut td.paragraph_spacing, Num::raw_px().range(0.0, 1000.0).speed(0.2), fw), "Space after paragraphs", None);
     });
     ui.horizontal(|ui| {
@@ -344,7 +347,7 @@ fn para_props(app: &mut App, ui: &mut Ui, td: &mut TextData) {
         );
         if td.path.is_some() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                widgets::tip(widgets::num_field(ui, icon::PATH, &mut td.path_offset, Num::px().range(-100000.0, 100000.0).speed(0.5), fw), "Offset along the path", None);
+                super::design::key_field(app, ui, Prop::PathOffset, |ui| widgets::tip(widgets::num_field(ui, icon::PATH, &mut td.path_offset, Num::px().range(-100000.0, 100000.0).speed(0.5), fw), "Offset along the path", None));
             });
         }
     });

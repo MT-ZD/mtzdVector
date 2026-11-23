@@ -1,0 +1,10 @@
+[package]
+name = "mtzd-webm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "AV1 WebM encoding (rav1e + a minimal Matroska muxer) for mtzd-vector"
+
+[dependencies]
+image = { version = "0.25.10", default-features = false }
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }

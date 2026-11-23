@@ -1,3 +1,4 @@
+mod animation;
 mod app;
 mod appearance;
 mod brushes;
@@ -22,6 +23,7 @@ mod gradient_handles;
 mod headless;
 mod icons;
 mod logo;
+mod mcp;
 mod io;
 mod ops;
 mod path_ops;
@@ -80,6 +82,9 @@ fn main() -> eframe::Result {
             }
         }
         return Ok(());
+    }
+    if let Some(i) = args.iter().position(|a| a == "--mcp") {
+        std::process::exit(mcp::run(&args[i + 1..]));
     }
     if let Some(i) = args.iter().position(|a| a == "--export") {
         std::process::exit(cli_export::run(&args[i + 1..]));
@@ -169,6 +174,9 @@ fn main() -> eframe::Result {
             app.apply_settings(settings::load(), &cc.egui_ctx);
             app.platform = platform::Platform::init(cc, app.settings.tablet);
             WAKE.set(cc.egui_ctx.clone());
+            // Agents (`--mcp`) drive this window through a socket.
+            #[cfg(unix)]
+            mcp::live::listen(|| WAKE.with_ctx(|c| c.request_repaint()));
             for f in files {
                 app.open_path(f);
             }
@@ -189,3 +197,7 @@ mod tests_paint;
 mod tests_print;
 #[cfg(test)]
 mod tests_workflow;
+#[cfg(test)]
+mod tests_anim;
+#[cfg(test)]
+mod tests_lottie;

@@ -33,8 +33,8 @@ fn blend_dialog(app: &mut App, ctx: &egui::Context) {
         .anchor(egui::Align2::RIGHT_TOP, [-330.0, 90.0])
         .show(ctx, |ui| {
             let mut steps = app.ui.blend.steps as f32;
-            if widgets::slider_row(ui, "Steps", &mut steps, 1.0..=50.0, "") {
-                app.ui.blend.steps = steps.round().clamp(1.0, 500.0) as u32;
+            if widgets::slider_row(ui, "Steps", &mut steps, 0.0..=50.0, "") {
+                app.ui.blend.steps = steps.round().clamp(0.0, 500.0) as u32;
             }
             hint(ui, "Shapes morphing between the two selected ones, in their colours, stroke widths and opacity. The blend stays live: edit either end shape or the steps in the Design panel, or expand it.");
             action = footer(ui, &[], &["Cancel"], "Apply");

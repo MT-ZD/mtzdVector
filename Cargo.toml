@@ -1,3 +1,6 @@
+[workspace]
+members = ["crates/webm"]
+
 [package]
 name = "mtzd-vector"
 version = "0.1.0"
@@ -20,6 +23,7 @@ libc = "0.2"
 lopdf = { version = "0.47.0", default-features = false }
 lyon_tessellation = "1.0.23"
 moxcms = "0.8"
+mtzd-webm = { path = "crates/webm" }
 pdf-writer = "0.15.0"
 pollster = "1.0.1"
 qrcodegen = "1.8.0"
@@ -28,7 +32,7 @@ resvg = { version = "0.49", default-features = false, features = ["raster-images
 rfd = "0.17.2"
 rustybuzz = "0.20.1"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = "1.0.154"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
 spellbook = "0.4"
 subsetter = "0.2"
 unicode-bidi = "0.3"
@@ -49,3 +53,16 @@ opt-level = 2
 [profile.release]
 lto = "thin"
 strip = true
+
+# The AV1 encoder lives in its own crate so rav1e's generic code is
+# instantiated there and optimised even in dev builds: at opt-level 0 a
+# 1080p frame took ~10 CPU-seconds instead of ~0.4.
+[profile.dev.package.mtzd-webm]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.rav1e]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false

@@ -453,6 +453,40 @@ fn lerp_stroke(a: Option<&Stroke>, b: Option<&Stroke>, t: f32) -> Option<Stroke>
     }
 }
 
+/// Rebuild the steps of live blend `id` in `doc`; true when they changed.
+pub fn regen_blend_in(doc: &mut crate::document::Document, id: u64, fonts: &mut crate::fonts::FontManager) -> bool {
+    let Some(g) = doc.get(id).cloned() else { return false };
+    let Some(LiveEffect::Blend { steps }) = g.live else { return false };
+    let Some(children) = g.kind.children() else { return false };
+    if children.len() < 2 {
+        return false;
+    }
+    let (a, b) = (&children[0], &children[children.len() - 1]);
+    let pa = crate::render::compute_outline(a, fonts).0;
+    let pb = crate::render::compute_outline(b, fonts).0;
+    let mut mid = blend_steps(a, &pa, b, &pb, steps);
+    adopt_ids(&mut mid, &children[1..children.len() - 1], doc);
+    let mut out = g.clone();
+    let mut list = vec![a.clone()];
+    list.extend(mid);
+    list.push(b.clone());
+    if list == *children {
+        return false;
+    }
+    out.kind = ShapeKind::Group { children: list };
+    doc.replace(out);
+    doc.fresh_rev();
+    true
+}
+
+/// Rebuild every live blend in `doc` (after its step counts were animated).
+pub fn regen_blends_in(doc: &mut crate::document::Document, fonts: &mut crate::fonts::FontManager) {
+    let ids: Vec<u64> = doc.all_ids().into_iter().filter(|id| matches!(doc.get(*id).and_then(|s| s.live.as_ref()), Some(LiveEffect::Blend { .. }))).collect();
+    for id in ids {
+        regen_blend_in(doc, id, fonts);
+    }
+}
+
 /// `steps` shapes morphing from `a` to `b` (both document-space outlines
 /// with their styles), in paint order.
 pub fn blend_steps(a: &Shape, pa: &BezPath, b: &Shape, pb: &BezPath, steps: u32) -> Vec<Shape> {
@@ -705,8 +739,8 @@ impl App {
         let (a, b) = (&shapes[0], &shapes[1]);
         let pa = crate::render::compute_outline(a, &mut self.fonts).0;
         let pb = crate::render::compute_outline(b, &mut self.fonts).0;
-        let mid = blend_steps(a, &pa, b, &pb, steps.clamp(1, 500));
-        if mid.is_empty() {
+        let mid = blend_steps(a, &pa, b, &pb, steps.min(500));
+        if pa.elements().is_empty() || pb.elements().is_empty() {
             self.notify("These shapes have no outline to blend");
             return;
         }
@@ -717,7 +751,7 @@ impl App {
         let mut g = Shape::new(ShapeKind::Group { children });
         g.fill = None;
         g.name = "Blend".into();
-        g.live = Some(LiveEffect::Blend { steps: steps.clamp(1, 500) });
+        g.live = Some(LiveEffect::Blend { steps: steps.min(500) });
         let id = self.combine_into(&shapes, g);
         self.selection = vec![id];
     }
@@ -725,28 +759,7 @@ impl App {
     /// Rebuild the steps of live blend `id` (between its first and last
     /// children); true when they changed.
     pub fn regen_blend(&mut self, id: u64) -> bool {
-        let Some(g) = self.doc.get(id).cloned() else { return false };
-        let Some(LiveEffect::Blend { steps }) = g.live else { return false };
-        let Some(children) = g.kind.children() else { return false };
-        if children.len() < 2 {
-            return false;
-        }
-        let (a, b) = (&children[0], &children[children.len() - 1]);
-        let pa = crate::render::compute_outline(a, &mut self.fonts).0;
-        let pb = crate::render::compute_outline(b, &mut self.fonts).0;
-        let mut mid = blend_steps(a, &pa, b, &pb, steps);
-        adopt_ids(&mut mid, &children[1..children.len() - 1], &mut self.doc);
-        let mut out = g.clone();
-        let mut list = vec![a.clone()];
-        list.extend(mid);
-        list.push(b.clone());
-        if list == *children {
-            return false;
-        }
-        out.kind = ShapeKind::Group { children: list };
-        self.doc.replace(out);
-        self.doc.fresh_rev();
-        true
+        regen_blend_in(&mut self.doc, id, &mut self.fonts)
     }
 
     /// Change a live blend's number of steps.
@@ -805,7 +818,7 @@ impl App {
         if !matches!(g.live, Some(LiveEffect::Blend { .. })) {
             return;
         }
-        g.live = Some(LiveEffect::Blend { steps: steps.clamp(1, 500) });
+        g.live = Some(LiveEffect::Blend { steps: steps.min(500) });
         self.doc.replace(g);
         self.regen_blend(id);
         self.dirty = true;

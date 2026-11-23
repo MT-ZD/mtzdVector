@@ -1927,6 +1927,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
+ "rayon",
 ]
 
 [[package]]
@@ -2003,6 +2004,7 @@ dependencies = [
  "lopdf",
  "lyon_tessellation",
  "moxcms",
+ "mtzd-webm",
  "pdf-writer",
  "pollster 1.0.1",
  "qrcodegen",
@@ -2025,6 +2027,14 @@ dependencies = [
  "webp",
  "wl-clipboard-rs",
  "zip",
+]
+
+[[package]]
+name = "mtzd-webm"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "rav1e",
 ]
 
 [[package]]
@@ -3343,6 +3353,8 @@ version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash 0.2.0",
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

@@ -303,6 +303,7 @@ fn preview(app: &mut App, ui: &mut Ui, path: &PathBuf, rect: egui::Rect) {
         let glyph = match crate::io::format_of(path) {
             Some(crate::io::Format::Pdf) => icon::FILE_PDF,
             Some(crate::io::Format::Svg) => icon::FILE_SVG,
+            Some(crate::io::Format::Lottie) => icon::FILM_STRIP,
             _ => icon::FILE,
         };
         painter.text(rect.center(), Align2::CENTER_CENTER, glyph, egui::FontId::proportional(22.0), TEXT_DIM);

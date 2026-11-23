@@ -69,12 +69,12 @@ impl Default for DocTab {
 
 impl DocTab {
     pub fn name(&self) -> String {
-        doc_name(self.file_path.as_ref())
+        doc_name(self.file_path.as_ref(), self.doc.title.as_deref())
     }
 }
 
-pub fn doc_name(path: Option<&PathBuf>) -> String {
-    path.and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into())
+pub fn doc_name(path: Option<&PathBuf>, title: Option<&str>) -> String {
+    path.and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).or(title.map(String::from)).unwrap_or_else(|| "Untitled".into())
 }
 
 /// What the tab bar shows for one tab.
@@ -140,7 +140,7 @@ impl App {
         (0..self.tabs.len())
             .map(|i| {
                 if i == self.tab {
-                    TabInfo { name: doc_name(self.file_path.as_ref()), path: self.file_path.clone(), dirty: self.dirty, active: true }
+                    TabInfo { name: doc_name(self.file_path.as_ref(), self.doc.title.as_deref()), path: self.file_path.clone(), dirty: self.dirty, active: true }
                 } else {
                     let t = &self.tabs[i];
                     TabInfo { name: t.name(), path: t.file_path.clone(), dirty: t.dirty, active: false }

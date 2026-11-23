@@ -247,13 +247,22 @@ impl App {
     }
 
     /// Rebuild one instance from its main (no override detection).
-    fn resync(&mut self, id: u64) -> bool {
+    pub fn resync(&mut self, id: u64) -> bool {
         let Some(inst) = self.doc.get(id).cloned() else { return false };
         let Some(Component::Instance(mut link)) = inst.component.clone() else { return false };
         let Some(main) = self.doc.get(link.main).cloned() else { return false };
-        let children = build_children(&main, &mut link, &mut self.doc);
+        let mut children = build_children(&main, &mut link, &mut self.doc);
+        // An auto-layout main: the instance is one too (its own text
+        // overrides change its size), laid out here so it is stable.
+        let layout = main.layout.clone().map(|mut l| {
+            l.background = l.background.and_then(|b| link.ids.get(&b).copied());
+            l
+        });
+        if let Some(l) = &layout {
+            self.flow_children(l, &mut children);
+        }
         let cur = inst.kind.children().cloned().unwrap_or_default();
-        let changed = !same(&cur, &children) || inst.component.as_ref() != Some(&Component::Instance(link.clone()));
+        let changed = !same(&cur, &children) || inst.component.as_ref() != Some(&Component::Instance(link.clone())) || inst.layout != layout;
         if changed {
             // `replace` stamps the whole subtree with a fresh revision, so the
             // render cache redraws the mirrored layers (their ids persist).
@@ -261,6 +270,7 @@ impl App {
             if let Some(c) = s.kind.children_mut() {
                 *c = children;
             }
+            s.layout = layout;
             s.component = Some(Component::Instance(link));
             self.doc.replace(s);
         }

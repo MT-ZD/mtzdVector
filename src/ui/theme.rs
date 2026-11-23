@@ -23,6 +23,11 @@ pub const TEXT: Color32 = Color32::from_rgb(0xE4, 0xE4, 0xE4);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8C, 0x8C, 0x8C);
 pub const TEXT_FAINT: Color32 = Color32::from_rgb(0x5E, 0x5E, 0x5E);
 pub const DANGER: Color32 = Color32::from_rgb(0xF0, 0x5A, 0x5A);
+pub const SUCCESS: Color32 = Color32::from_rgb(0x4C, 0xC3, 0x7A);
+/// Inputs of a property keyed at the playhead (Blender's yellow, darkened).
+pub const KEYED: Color32 = Color32::from_rgb(0x5A, 0x4C, 0x14);
+/// Inputs of a property animated, on an interpolated frame between keys (orange).
+pub const ANIMATED: Color32 = Color32::from_rgb(0x5E, 0x36, 0x12);
 /// Canvas pasteboard around the artboard.
 pub const CANVAS: Color32 = BG_APP;
 

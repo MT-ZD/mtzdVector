@@ -5,6 +5,7 @@ use egui::{RichText, Sense, Stroke, Ui, pos2, vec2};
 use egui_phosphor::regular as icon;
 
 use super::{design, edit_style};
+use crate::animation::Prop;
 use crate::app::App;
 use crate::document::{Arrowhead, LineCap, LineJoin, ShapeKind, Stroke as DStroke, StrokeAlign};
 use crate::ui::theme::{self, TEXT_DIM};
@@ -172,12 +173,21 @@ pub fn stroke_section(app: &mut App, ui: &mut Ui) {
             |ui| {
                 let Some(st) = &mut p.stroke else { return };
                 let hex = super::color::key_label(app, p.stroke_key).unwrap_or_else(|| st.color.with_alpha(1.0).to_hex());
-                let open = design::paint_row(app, ui, "stroke", WellPaint::Solid(st.color), &hex, |ui| super::color::alpha_field(ui, &mut st.color));
+                let top = ui.cursor().min.y;
+                let tint = design::key_tint(app, Prop::StrokeColor);
+                let open = ui
+                    .scope(|ui| {
+                        design::set_input_tint(ui, tint);
+                        design::paint_row(app, ui, "stroke", WellPaint::Solid(st.color), &hex, |ui| super::color::alpha_field(ui, &mut st.color))
+                    })
+                    .inner;
                 if open {
                     design::editor_frame(ui, |ui| {
                         design::picker_linked(app, ui, &mut st.color, Some(&mut p.stroke_key), egui::Id::new("stroke_picker"), Some(("Pick the stroke colour from the canvas", &mut pick)));
                     });
                 }
+                let r = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().min.y);
+                app.anim_hover(ui, r, None, &[Prop::StrokeColor]);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     widgets::segmented_width(ui, &mut st.align, &[(StrokeAlign::Inside, "Inside"), (StrokeAlign::Center, "Center"), (StrokeAlign::Outside, "Outside")], (ui.available_width() - 78.0).max(130.0));
@@ -190,7 +200,7 @@ pub fn stroke_section(app: &mut App, ui: &mut Ui) {
                 }
                 if shown {
                     ui.add_space(2.0);
-                    let r = ui.scope(|ui| stroke_options(ui, st, closed)).response.rect;
+                    let r = ui.scope(|ui| stroke_options(app, ui, st, closed)).response.rect;
                     widgets::reveal(ui, "stroke_options", r);
                 }
                 extra_strokes(app, ui, &mut p.strokes);
@@ -257,7 +267,7 @@ fn profile_sample(ui: &mut Ui, profile: &[crate::document::WidthPoint], w: f32) 
     ui.painter().add(egui::Shape::Path(egui::epaint::PathShape::closed_line(pts, Stroke::new(1.0, theme::TEXT))));
 }
 
-fn stroke_options(ui: &mut Ui, st: &mut DStroke, closed: bool) {
+fn stroke_options(app: &mut App, ui: &mut Ui, st: &mut DStroke, closed: bool) {
     let fw = (ui.available_width() - 68.0).max(80.0);
     widgets::prop_row(ui, "Width", |ui| {
         let current = crate::document::WidthPreset::of(&st.profile).map(|p| p.label()).unwrap_or("Custom (brush)");
@@ -302,6 +312,7 @@ fn stroke_options(ui: &mut Ui, st: &mut DStroke, closed: bool) {
             st.dash.push(st.dash.first().copied().unwrap_or(2.0));
         }
         let half = ((fw - 4.0) / 2.0).max(60.0);
+        design::key_rows(app, ui, Prop::Dash, |_, ui| {
         widgets::prop_row(ui, "Dash / gap", |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             widgets::num_field(ui, "", &mut st.dash[0], Num::default().range(0.0, 100.0).speed(0.05).suffix("×"), half);
@@ -314,9 +325,12 @@ fn stroke_options(ui: &mut Ui, st: &mut DStroke, closed: bool) {
                 widgets::num_field(ui, "", &mut st.dash[3], Num::default().range(0.0, 100.0).speed(0.05).suffix("×"), half);
             });
         }
-        widgets::prop_row(ui, "Phase", |ui| {
-            widgets::num_field(ui, "", &mut st.dash_offset, Num::default().range(-1000.0, 1000.0).speed(0.05).suffix("×"), half);
-            ui.label(RichText::new("× width").size(theme::FONT_SM).color(theme::TEXT_FAINT));
+        });
+        design::key_rows(app, ui, Prop::DashOffset, |_, ui| {
+            widgets::prop_row(ui, "Phase", |ui| {
+                widgets::num_field(ui, "", &mut st.dash_offset, Num::default().range(-1000.0, 1000.0).speed(0.05).suffix("×"), half);
+                ui.label(RichText::new("× width").size(theme::FONT_SM).color(theme::TEXT_FAINT));
+            });
         });
         let (d, cap) = (st.dash.clone(), st.cap);
         widgets::prop_row(ui, "", |ui| dash_sample(ui, &d, cap, fw - 8.0));
