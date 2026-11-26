@@ -1,0 +1,9 @@
+[package]
+name = "mtzd-ruida"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Ruida laser controller protocol (RDC644x): job encoding, USB serial session, emulator"
+
+[dependencies]
+serialport = { version = "4.10.1", default-features = false }

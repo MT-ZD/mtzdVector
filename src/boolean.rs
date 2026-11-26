@@ -77,6 +77,21 @@ pub fn split_pieces(p: &Polys) -> Vec<Polys> {
         .collect()
 }
 
+/// Grow (`d` > 0) or shrink (`d` < 0) areas by |d|, with round joins.
+/// Shrinking past the middle leaves nothing.
+pub fn offset_polys(p: &Polys, d: f64) -> Polys {
+    use i_overlay::mesh::float::outline::offset::OutlineOffset;
+    use i_overlay::mesh::float::style::{LineJoin, OutlineStyle};
+    if p.is_empty() || d == 0.0 {
+        return p.clone();
+    }
+    // Shapes in i_overlay's orientation (outer CCW, holes CW).
+    let empty: Polys = Vec::new();
+    let shapes = p.overlay(&empty, OverlayRule::Subject, IFill::EvenOdd);
+    let style = OutlineStyle::new(d).line_join(LineJoin::Round(0.2));
+    flatten_shapes(shapes.outline(&style))
+}
+
 pub fn area(p: &Polys) -> f64 {
     // Even-odd: outer contours and holes have opposite orientation in i_overlay output.
     p.iter().map(|c| geom::poly_area(c)).sum::<f64>().abs()

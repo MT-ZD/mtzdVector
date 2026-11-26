@@ -12,7 +12,7 @@ use crate::commands::{Cmd, alias_match, fuzzy_score};
 pub fn matches(app: &App, query: &str) -> Vec<(Cmd, Option<&'static str>)> {
     let mut v: Vec<(Cmd, i32, bool, Option<&'static str>)> = Cmd::all()
         .into_iter()
-        .filter(|c| *c != Cmd::Palette)
+        .filter(|c| *c != Cmd::Palette && c.available(app))
         .filter_map(|c| {
             let m = c.meta();
             // A name that starts a word beats an alias; a scattered fuzzy

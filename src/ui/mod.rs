@@ -85,6 +85,8 @@ pub struct UiState {
     pub shortcuts_open: bool,
     pub about_open: bool,
     pub agents: agents::AgentsUi,
+    /// Plugins › Manage Plugins… is open.
+    pub plugins_open: bool,
     /// Start screen with templates and recent documents.
     pub welcome_open: bool,
     pub welcome: welcome::WelcomeState,
@@ -126,6 +128,7 @@ impl Default for UiState {
             export: Default::default(),
             about_open: false,
             agents: Default::default(),
+            plugins_open: false,
             anchor: (0, 0),
             keys: Default::default(),
         }
@@ -211,6 +214,7 @@ impl App {
         self.poll_export_job();
         self.spell_tick(&ctx);
         self.print_tick(&ctx);
+        self.with_plugins(|h, app| h.tick(app, &ctx));
 
         menubar::show(self, ui);
         toolbar::show(self, ui);
@@ -239,6 +243,8 @@ impl App {
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         agents::show(self, &ctx);
+        crate::plugins::manage_ui::show(self, &ctx);
+        self.with_plugins(|h, app| h.windows(app, &ctx));
         welcome::show(self, &ctx);
         export::show(self, &ctx);
         window::modal_overlay(self, &ctx);

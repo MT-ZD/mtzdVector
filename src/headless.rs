@@ -328,7 +328,7 @@ pub fn find_cmd(name: &str) -> Result<crate::commands::Cmd, String> {
     let name = name.to_lowercase();
     crate::commands::Cmd::all()
         .into_iter()
-        .find(|c| format!("{c:?}").to_lowercase() == name || c.label().to_lowercase() == name)
+        .find(|c| c.name().to_lowercase() == name || c.label().to_lowercase() == name)
         .ok_or(format!("unknown command {name}"))
 }
 

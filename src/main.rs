@@ -28,6 +28,7 @@ mod io;
 mod ops;
 mod path_ops;
 mod platform;
+mod plugins;
 mod prim_handles;
 mod prims;
 mod recent;

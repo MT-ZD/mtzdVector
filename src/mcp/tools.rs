@@ -1445,9 +1445,9 @@ pub fn call(app: &mut App, ctx: &egui::Context, ptr: &mut Pointer, name: &str, a
             let f = str_arg(args, "filter").unwrap_or("").to_lowercase();
             let v: Vec<Value> = Cmd::all()
                 .into_iter()
-                .filter(|c| !matches!(c, Cmd::Tool(_)) && blocked(*c, app).is_none())
-                .filter(|c| f.is_empty() || [format!("{c:?}"), c.label().into(), c.meta().category.label().into()].iter().any(|s| s.to_lowercase().contains(&f)))
-                .map(|c| json!({"name": format!("{c:?}"), "label": c.label(), "category": c.meta().category.label(), "shortcut": c.shortcut_text(), "enabled": c.enabled(app)}))
+                .filter(|c| !matches!(c, Cmd::Tool(_)) && c.available(app) && blocked(*c, app).is_none())
+                .filter(|c| f.is_empty() || [c.name(), c.label().into(), c.meta().category.label().into()].iter().any(|s| s.to_lowercase().contains(&f)))
+                .map(|c| json!({"name": c.name(), "label": c.label(), "category": c.meta().category.label(), "shortcut": c.shortcut_text(), "enabled": c.enabled(app)}))
                 .collect();
             Ok(text(json!(v)))
         }

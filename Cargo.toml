@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/webm"]
+members = ["crates/webm", "crates/ruida"]
 
 [package]
 name = "mtzd-vector"
@@ -24,6 +24,7 @@ lopdf = { version = "0.47.0", default-features = false }
 lyon_tessellation = "1.0.23"
 moxcms = "0.8"
 mtzd-webm = { path = "crates/webm" }
+mtzd-ruida = { path = "crates/ruida", optional = true }
 pdf-writer = "0.15.0"
 pollster = "1.0.1"
 qrcodegen = "1.8.0"
@@ -46,6 +47,11 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 webp = { version = "0.3.1", default-features = false }
 wl-clipboard-rs = "0.9"
 zip = { version = "9.4.1", default-features = false, features = ["deflate"] }
+
+[features]
+default = ["ruida"]
+# The Laser plugin (Ruida controllers over USB).
+ruida = ["dep:mtzd-ruida"]
 
 [profile.dev.package."*"]
 opt-level = 2

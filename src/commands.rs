@@ -140,6 +140,8 @@ pub enum Cmd {
     Tool(Tool),
     /// Set the selection's opacity to n × 10% (0 = 100%).
     Opacity(u8),
+    /// A plugin's command (index into `plugins::command`).
+    Plugin(u16),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -155,6 +157,7 @@ pub enum Category {
     View,
     Tools,
     Help,
+    Plugins,
 }
 
 impl Category {
@@ -171,6 +174,7 @@ impl Category {
             Category::View => "View",
             Category::Tools => "Tool",
             Category::Help => "Help",
+            Category::Plugins => "Plugins",
         }
     }
 }
@@ -244,7 +248,25 @@ impl Cmd {
         ];
         v.extend(Cmd::TOOLS);
         v.extend((0..10).map(Cmd::Opacity));
+        v.extend(crate::plugins::all_commands().map(Cmd::Plugin));
         v
+    }
+
+    /// Shown at all: plugin commands only while their plugin is on.
+    pub fn available(self, app: &App) -> bool {
+        match self {
+            Cmd::Plugin(i) => app.plugins.cmd_on(i),
+            _ => true,
+        }
+    }
+
+    /// The name agents and scripts use: the variant (`Union`, `Tool(Pen)`),
+    /// or `plugin.command` for plugin commands (`laser.frame`).
+    pub fn name(self) -> String {
+        match self {
+            Cmd::Plugin(i) => crate::plugins::command(i).map(|e| format!("{}.{}", e.plugin_id, e.cmd.id)).unwrap_or_default(),
+            c => format!("{c:?}"),
+        }
     }
 
 /// Other names people search for a command by (Ctrl+K): terms from other
@@ -379,6 +401,7 @@ impl Cmd {
                 }
             }
             Opacity(_) => "transparency, alpha, fade",
+            Plugin(i) => crate::plugins::command(i).map(|e| e.cmd.aliases).unwrap_or(""),
             _ => "",
         }
     }
@@ -546,6 +569,10 @@ impl Cmd {
                 };
                 m(t.name(), t.icon(), keys, C::Tools, Canvas)
             }
+            Plugin(i) => match crate::plugins::command(i) {
+                Some(e) => m(e.cmd.label, e.cmd.icon, e.cmd.keys, C::Plugins, Canvas),
+                None => m("Unknown plugin command", icon::PUZZLE_PIECE, &[], C::Plugins, Canvas),
+            },
         }
     }
 
@@ -581,6 +608,7 @@ impl Cmd {
             DeleteArtboard => app.doc.artboards.len() > 1,
             NextArtboard | PrevArtboard => app.doc.artboards.len() > 1,
             Opacity(_) => has,
+            Plugin(i) => app.plugins.enabled_cmd(i, app),
             PasteStyle => has && app.style_clip.is_some(),
             SelectAll => !app.doc.shapes().is_empty(),
             DistributeH | DistributeV => n >= 3,
@@ -627,6 +655,7 @@ impl Cmd {
             Cmd::ToggleOutline => Some(app.ui.outline_view),
             Cmd::ToggleGrid => Some(app.ui.show_grid),
             Cmd::Tool(t) => Some(app.tool == t),
+            Cmd::Plugin(i) => app.plugins.checked_cmd(i, app),
             _ => None,
         }
     }
@@ -819,6 +848,7 @@ impl Cmd {
             About => app.ui.about_open = true,
             Tool(t) => app.set_tool(t),
             Opacity(k) => app.set_opacity(if k == 0 { 1.0 } else { k as f32 / 10.0 }),
+            Plugin(i) => app.with_plugins(|h, app| h.run(i, app, ctx)),
         }
     }
 }

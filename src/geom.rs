@@ -927,3 +927,31 @@ pub fn path_touches_rect(path: &BezPath, r: Rect, tol: f64) -> bool {
     hit
 }
 
+
+/// A path as polylines, one per subpath, open ones kept open: (points,
+/// closed). A closed subpath doesn't repeat its first point.
+pub fn flatten_subpaths(path: &BezPath, tol: f64) -> Vec<(Vec<Point>, bool)> {
+    let mut out: Vec<(Vec<Point>, bool)> = Vec::new();
+    let mut cur: Vec<Point> = Vec::new();
+    let flush = |cur: &mut Vec<Point>, closed: bool, out: &mut Vec<(Vec<Point>, bool)>| {
+        if closed && cur.len() > 2 && cur.first() == cur.last() {
+            cur.pop();
+        }
+        if cur.len() >= 2 {
+            let closed = closed && cur.len() > 2;
+            out.push((std::mem::take(cur), closed));
+        }
+        cur.clear();
+    };
+    kurbo::flatten(path.iter(), tol, |el| match el {
+        kurbo::PathEl::MoveTo(p) => {
+            flush(&mut cur, false, &mut out);
+            cur.push(p);
+        }
+        kurbo::PathEl::LineTo(p) => cur.push(p),
+        kurbo::PathEl::ClosePath => flush(&mut cur, true, &mut out),
+        _ => {}
+    });
+    flush(&mut cur, false, &mut out);
+    out
+}

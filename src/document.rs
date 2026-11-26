@@ -2258,6 +2258,9 @@ pub struct Document {
     /// Length, frame rate and playhead, once anything is animated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub animation: Option<crate::animation::Timeline>,
+    /// Plugin data that travels with the file (by plugin id).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_data: BTreeMap<String, serde_json::Value>,
     next_id: u64,
     #[serde(skip)]
     next_rev: u64,
@@ -2313,6 +2316,7 @@ impl Default for Document {
             colors: Vec::new(),
             text_styles: Vec::new(),
             animation: None,
+            plugin_data: BTreeMap::new(),
             next_id: 2,
             next_rev: 1,
             index: IdIndex::default(),
@@ -2842,7 +2846,7 @@ impl Document {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { shapes: self.shapes.clone(), guides: self.guides.clone(), artboards: self.artboards.clone(), colors: self.colors.clone(), text_styles: self.text_styles.clone(), animation: self.animation.clone() }
+        Snapshot { shapes: self.shapes.clone(), guides: self.guides.clone(), artboards: self.artboards.clone(), colors: self.colors.clone(), text_styles: self.text_styles.clone(), animation: self.animation.clone(), plugin_data: self.plugin_data.clone() }
     }
 
     pub fn restore(&mut self, s: Snapshot) {
@@ -2853,6 +2857,7 @@ impl Document {
         self.colors = s.colors;
         self.text_styles = s.text_styles;
         self.animation = s.animation;
+        self.plugin_data = s.plugin_data;
     }
 
     // Colour keys ---------------------------------------------------------
@@ -2988,6 +2993,7 @@ pub struct Snapshot {
     pub text_styles: Vec<TextStyle>,
     /// With the shapes: they show the document at its playhead.
     pub animation: Option<crate::animation::Timeline>,
+    pub plugin_data: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Default)]

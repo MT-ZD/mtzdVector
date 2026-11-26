@@ -385,6 +385,8 @@ pub struct App {
     /// Last duplicate (copies, bounds of their source) for step-and-repeat.
     pub last_dup: Option<(Vec<u64>, Rect)>,
     pub settings: crate::settings::Settings,
+    /// Built-in plugins (see `plugins`).
+    pub plugins: crate::plugins::PluginHost,
     pub settings_saved: crate::settings::Settings,
     pub settings_last_save: f64,
     /// Command requested from inside a panel closure, run after the UI pass.
@@ -529,6 +531,7 @@ impl App {
             prev_tool: None,
             last_dup: None,
             settings: Default::default(),
+            plugins: crate::plugins::PluginHost::new(),
             settings_saved: Default::default(),
             settings_last_save: 0.0,
             pending_cmd: None,

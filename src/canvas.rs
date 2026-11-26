@@ -2168,6 +2168,7 @@ impl App {
         let accent = theme::ACCENT;
         self.paint_onion(painter);
         self.paint_guides(painter, self.canvas_rect);
+        self.with_plugins(|h, app| h.canvas_overlay(app, painter));
 
         // Inside a boolean: show every sibling's outline (subtracted shapes
         // are otherwise invisible).

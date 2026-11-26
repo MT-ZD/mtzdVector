@@ -198,6 +198,7 @@ fn shortcuts(ui: &mut Ui) {
             Category::View,
             Category::Tools,
             Category::Help,
+            Category::Plugins,
         ];
         for cat in cats {
             let cmds: Vec<Cmd> = Cmd::all().into_iter().filter(|c| c.meta().category == cat && !c.meta().keys.is_empty()).collect();

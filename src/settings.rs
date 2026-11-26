@@ -46,6 +46,8 @@ pub struct Settings {
     pub show_timeline: bool,
     /// Let AI agents (`--mcp`) drive the open window.
     pub agent_control: bool,
+    /// Per plugin (by id): switched on, and its own settings.
+    pub plugins: std::collections::BTreeMap<String, crate::plugins::PluginEntry>,
 }
 
 impl Default for Settings {
@@ -74,6 +76,7 @@ impl Default for Settings {
             tablet: true,
             show_timeline: false,
             agent_control: true,
+            plugins: Default::default(),
         }
     }
 }
@@ -124,6 +127,7 @@ impl App {
         if (s.ui_scale - ctx.zoom_factor()).abs() > 1e-3 && enabled() {
             ctx.set_zoom_factor(s.ui_scale.clamp(0.5, 2.0));
         }
+        self.plugins.load(&s.plugins);
         self.settings = s.clone();
         self.settings_saved = s;
     }
@@ -140,6 +144,7 @@ impl App {
         s.show_guides = self.ui.show_guides;
         s.show_grid = self.ui.show_grid;
         s.snap = self.snap;
+        self.plugins.store(&mut s.plugins);
         #[cfg(unix)]
         crate::mcp::live::ENABLED.store(s.agent_control, std::sync::atomic::Ordering::Relaxed);
         s.picker = crate::color::picker_prefs(ctx);

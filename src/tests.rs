@@ -568,7 +568,7 @@ mod app_tests {
         let mut d = Driver::new();
         let sent = |d: &Driver, f: &dyn Fn(&V) -> bool| d.cmds.iter().any(f);
         // Dragging empty title bar space moves the window.
-        let p = egui::pos2(500.0, 10.0);
+        let p = egui::pos2(1000.0, 10.0);
         d.move_to(p);
         d.button(egui::PointerButton::Primary, true);
         let mut moved = false;

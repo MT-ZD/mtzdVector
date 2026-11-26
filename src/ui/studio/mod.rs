@@ -72,6 +72,16 @@ const N: usize = GROUPS.len();
 const MIN_BODY: f32 = 70.0;
 
 impl App {
+    /// Bring a plugin's Studio tab to the front.
+    #[allow(dead_code)] // unused in builds without plugins
+    pub fn show_plugin_panel(&mut self, panel_id: &str) {
+        if let Some(k) = self.plugins.active_panels().iter().position(|(_, p)| p.id == panel_id) {
+            self.ui.show_studio = true;
+            self.ui.tab[DESIGN] = GROUPS[DESIGN].len() + k;
+            self.ui.collapsed[DESIGN] = false;
+        }
+    }
+
     /// Bring the Design inspector to the front.
     pub fn show_design(&mut self) {
         self.ui.show_studio = true;
@@ -166,8 +176,11 @@ fn group(app: &mut App, ui: &mut Ui, g: usize, rect: Rect) {
     ui.spacing_mut().item_spacing.y = 0.0;
     let mut tab = app.ui.tab[g];
     let mut collapsed = app.ui.collapsed[g];
-    widgets::tab_group_header(ui, GROUPS[g], &mut tab, &mut collapsed);
-    app.ui.tab[g] = tab.min(GROUPS[g].len() - 1);
+    // Plugin tabs join the upper group.
+    let panels = if g == DESIGN { app.plugins.active_panels() } else { Vec::new() };
+    let titles: Vec<&str> = GROUPS[g].iter().copied().chain(panels.iter().map(|(_, p)| p.title)).collect();
+    widgets::tab_group_header(ui, &titles, &mut tab, &mut collapsed);
+    app.ui.tab[g] = tab.min(titles.len() - 1);
     app.ui.collapsed[g] = collapsed;
     if collapsed {
         return;
@@ -197,8 +210,13 @@ fn group(app: &mut App, ui: &mut Ui, g: usize, rect: Rect) {
         egui::Frame::new().inner_margin(egui::Margin { left: 16, right: 16, top: 6, bottom: 16 }).show(ui, |ui| {
             ui.set_width(body.width() - 32.0);
             match tab {
+                0 => design::show(app, ui),
                 1 => keys::show(app, ui),
-                _ => design::show(app, ui),
+                t => {
+                    if let Some((plugin, panel)) = panels.get(t - GROUPS[DESIGN].len()) {
+                        app.with_plugins(|h, app| h.panel_ui(*plugin, panel.id, app, ui));
+                    }
+                }
             }
         });
     });

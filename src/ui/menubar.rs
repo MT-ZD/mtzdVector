@@ -183,6 +183,29 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     ui.separator();
                     cmd_item(ui, app, Cmd::ToggleStudio);
                 });
+                ui.menu_button("Plugins", |ui| {
+                    ui.set_min_width(240.0);
+                    // One submenu per plugin.
+                    let cmds: Vec<Cmd> = Cmd::all().into_iter().filter(|c| matches!(c, Cmd::Plugin(_)) && c.available(app)).collect();
+                    let plugin_of = |c: &Cmd| if let Cmd::Plugin(i) = c { crate::plugins::command(*i).map(|e| e.plugin) } else { None };
+                    let mut owners: Vec<usize> = cmds.iter().filter_map(plugin_of).collect();
+                    owners.dedup();
+                    for o in &owners {
+                        let Some((name, glyph)) = crate::plugins::plugin_label(*o) else { continue };
+                        let mine: Vec<Cmd> = cmds.iter().copied().filter(|c| plugin_of(c) == Some(*o)).collect();
+                        submenu(ui, glyph, name, |ui| {
+                            ui.set_min_width(240.0);
+                            cmd_items(ui, app, &mine);
+                        });
+                    }
+                    if !owners.is_empty() {
+                        ui.separator();
+                    }
+                    if ui.add(egui::Button::new(RichText::new(format!("{}   Manage Plugins…", icon::PUZZLE_PIECE)).size(theme::FONT_MD)).min_size(vec2(0.0, 22.0))).clicked() {
+                        ui.close();
+                        app.ui.plugins_open = true;
+                    }
+                });
                 ui.menu_button("Help", |ui| {
                     ui.set_min_width(240.0);
                     cmd_items(ui, app, &[Cmd::Palette, Cmd::Shortcuts, Cmd::Agents]);

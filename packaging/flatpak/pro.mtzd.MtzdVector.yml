@@ -25,6 +25,8 @@ finish-args:
   - --filesystem=host-os:ro
   # File managers ask the thumbnailer to write its PNG into the host's /tmp.
   - --filesystem=/tmp
+  # The Laser plugin talks to the laser's USB serial port (/dev/ttyUSB*).
+  - --device=all
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:

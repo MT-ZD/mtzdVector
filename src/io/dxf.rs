@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use kurbo::PathEl;
 
 use crate::document::{Document, Rgba, Shape};
 use crate::fonts::FontManager;
@@ -109,26 +108,9 @@ pub fn export(doc: &Document, fonts: &mut FontManager) -> String {
         let s: &Shape = &it.shape;
         let col = s.stroke.as_ref().filter(|st| st.width > 0.0).map(|st| st.color).or_else(|| s.fill.as_ref().and_then(|f| f.solid())).unwrap_or(Rgba::BLACK);
         let layer = names.get(&s.id).cloned().unwrap_or_else(|| "0".into());
-        let mut cur: Vec<(f64, f64)> = Vec::new();
-        let flush = |cur: &mut Vec<(f64, f64)>, closed: bool, polys: &mut Vec<(String, u8, bool, Vec<(f64, f64)>)>| {
-            if cur.len() >= 2 {
-                if closed && cur.len() > 2 && cur.first() == cur.last() {
-                    cur.pop();
-                }
-                polys.push((layer.clone(), aci(col), closed, std::mem::take(cur)));
-            }
-            cur.clear();
-        };
-        kurbo::flatten(it.path.iter(), 0.05, |el| match el {
-            PathEl::MoveTo(p) => {
-                flush(&mut cur, false, &mut polys);
-                cur.push((p.x * k, (h - p.y) * k));
-            }
-            PathEl::LineTo(p) => cur.push((p.x * k, (h - p.y) * k)),
-            PathEl::ClosePath => flush(&mut cur, true, &mut polys),
-            _ => {}
-        });
-        flush(&mut cur, false, &mut polys);
+        for (pts, closed) in crate::geom::flatten_subpaths(&it.path, 0.05) {
+            polys.push((layer.clone(), aci(col), closed, pts.iter().map(|p| (p.x * k, (h - p.y) * k)).collect()));
+        }
     }
     let mut layers: Vec<String> = polys.iter().map(|p| p.0.clone()).collect();
     layers.sort();
